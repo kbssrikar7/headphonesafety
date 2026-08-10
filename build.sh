@@ -18,6 +18,7 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BUILD_DIR/HeadphoneSafety" "$APP_DIR/Contents/MacOS/HeadphoneSafety"
 cp Info.plist "$APP_DIR/Contents/Info.plist"
+cp AppIcon.icns "$APP_DIR/Contents/Resources/AppIcon.icns"
 
 echo "Ad-hoc code signing..."
 codesign --force --deep --sign - "$APP_DIR"
