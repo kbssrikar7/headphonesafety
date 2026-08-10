@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Headphone Safety</string>
+    <key>CFBundleDisplayName</key>
+    <string>Headphone Safety</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.local.headphonesafety</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>HeadphoneSafety</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Personal use</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Headphone Safety captures system audio routed through BlackHole (a virtual loopback device) to apply real-time volume limiting before sending it to your headphones. No physical microphone is used.</string>
+</dict>
+</plist>
