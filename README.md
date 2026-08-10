@@ -65,6 +65,7 @@ Since this reroutes system-wide audio, correctness on the way *back* out matters
 ## Requirements
 
 - macOS 12 or later
+- Apple Silicon or Intel — [release builds](https://github.com/kbssrikar7/headphonesafety/releases) are universal binaries, and building from source produces one too
 - [Swift](https://www.swift.org/) toolchain (for building from source)
 - [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) — only required for the Real-Time Limiter feature; Volume Cap works without it:
 
