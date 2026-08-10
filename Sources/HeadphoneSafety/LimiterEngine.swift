@@ -34,6 +34,23 @@ final class LimiterEngine {
     private(set) var isRunning = false
     var onEngineFailure: (() -> Void)?
 
+    // If the real output device (e.g. Bluetooth headphones) physically disconnects
+    // while the output Audio Unit is bound to it, CoreAudio HAL calls on that unit -
+    // even a read-only property query like CurrentDevice - can block the calling
+    // thread indefinitely waiting for an I/O acknowledgment that never comes, because
+    // the device is simply gone. Confirmed live: disconnecting headphones mid-render
+    // froze the app's main thread and every diagnostic/revert path with it. This flag,
+    // set from a system device-list listener (not the audio thread, not touching the
+    // stuck unit), tells every other piece of code to stop calling into outputUnit
+    // entirely and instead check via a completely independent, device-list-based path.
+    private let deviceRemovalLock = NSLock()
+    private var deviceRemovalDetectedStorage = false
+    private var deviceRemovalDetected: Bool {
+        get { deviceRemovalLock.lock(); defer { deviceRemovalLock.unlock() }; return deviceRemovalDetectedStorage }
+        set { deviceRemovalLock.lock(); deviceRemovalDetectedStorage = newValue; deviceRemovalLock.unlock() }
+    }
+    private var deviceListListenerBlock: AudioObjectPropertyListenerBlock?
+
     private var watchdogTimer: Timer?
     private var lastRenderedFrames: UInt64 = 0
     private var lastObservedFrames: UInt64 = 0
@@ -111,6 +128,8 @@ final class LimiterEngine {
         lastRenderedFrames = 0
         lastObservedFrames = 0
         missedChecks = 0
+        deviceRemovalDetected = false
+        registerDeviceListListener(watching: realOutputDevice)
         startWatchdog()
         return true
     }
@@ -118,14 +137,55 @@ final class LimiterEngine {
     func stop() {
         watchdogTimer?.invalidate()
         watchdogTimer = nil
+        unregisterDeviceListListener()
         tearDownAll()
         for buffer in ringBuffers { buffer.reset() }
         isRunning = false
         targetOutputDevice = nil
+        deviceRemovalDetected = false
         if let saved = savedDefaultInput {
             CoreAudioUtils.setDefaultInputDevice(saved)
         }
         savedDefaultInput = nil
+    }
+
+    // MARK: - Device removal detection
+
+    // Watches the system-wide device list. Deliberately does NOT re-query which
+    // devices are present here - a per-device property query (even a plain
+    // enumeration, even off the main thread) against a device that's mid-Bluetooth-
+    // teardown has been observed to block indefinitely, which would silently defeat
+    // this exact listener. Any device-list change at all while the limiter is running
+    // is treated as "the device might be gone" and triggers an unconditional revert -
+    // a spurious revert on an unrelated device change (e.g. plugging in a USB mic) is
+    // cheap, since the limiter just restarts on the next tick if headphones are still
+    // there; a hang here is not recoverable at all.
+    private func registerDeviceListListener(watching device: AudioDeviceID) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            self.deviceRemovalDetected = true
+            DispatchQueue.main.async {
+                self.onEngineFailure?()
+            }
+        }
+        deviceListListenerBlock = block
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.global(qos: .utility), block)
+    }
+
+    private func unregisterDeviceListListener() {
+        guard let block = deviceListListenerBlock else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.global(qos: .utility), block)
+        deviceListListenerBlock = nil
     }
 
     func updateHeadroom(_ headroomDb: Float) {
@@ -348,7 +408,10 @@ final class LimiterEngine {
     }
 
     private func currentOutputDevice() -> AudioDeviceID? {
-        guard let unit = outputUnit else { return nil }
+        // Once device removal is detected, never touch outputUnit again - even this
+        // read-only property query can block indefinitely on a unit bound to hardware
+        // that's already gone.
+        guard !deviceRemovalDetected, let unit = outputUnit else { return nil }
         var deviceID = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID, &size)
@@ -370,9 +433,24 @@ final class LimiterEngine {
         renderBufferList = nil
 
         if let unit = outputUnit {
-            AudioOutputUnitStop(unit)
-            AudioUnitUninitialize(unit)
-            AudioComponentInstanceDispose(unit)
+            if deviceRemovalDetected {
+                // The bound device is gone - Stop/Uninitialize/Dispose on this unit
+                // have been observed to hang indefinitely waiting for an I/O
+                // acknowledgment from hardware that no longer exists. Abandoning the
+                // unit (best-effort async cleanup, may never complete) is a one-time
+                // resource leak; blocking the caller here is a hang of the entire
+                // app's revert path, which is strictly worse and exactly the failure
+                // this app's rollback guarantee exists to prevent.
+                DispatchQueue.global(qos: .utility).async {
+                    AudioOutputUnitStop(unit)
+                    AudioUnitUninitialize(unit)
+                    AudioComponentInstanceDispose(unit)
+                }
+            } else {
+                AudioOutputUnitStop(unit)
+                AudioUnitUninitialize(unit)
+                AudioComponentInstanceDispose(unit)
+            }
         }
         outputUnit = nil
 
@@ -392,6 +470,15 @@ final class LimiterEngine {
     }
 
     private func checkLiveness() {
+        // Defense in depth: the device-list listener already dispatches
+        // onEngineFailure directly the moment removal is detected, but if that
+        // somehow didn't fire, this catches it on the next 1.5s tick regardless -
+        // and never touches outputUnit itself either way (currentOutputDevice()
+        // guards on the same flag).
+        if deviceRemovalDetected {
+            onEngineFailure?()
+            return
+        }
         onDiagnostics?(lastRenderedFrames, framesRequestedByOutput, isRunning, lastRenderStatus, renderErrorCount, currentOutputDevice(), targetOutputDevice, lastCapturePeak, lastSourcePeak, lastOutputPeak)
         if lastRenderedFrames == lastObservedFrames {
             missedChecks += 1
