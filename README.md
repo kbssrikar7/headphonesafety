@@ -75,13 +75,23 @@ Since this reroutes system-wide audio, correctness on the way *back* out matters
 
 ## Installation
 
-### Option 1: Download a release (recommended)
+### Option 1: Homebrew (recommended)
+
+```
+brew tap kbssrikar7/headphonesafety
+brew install --cask headphonesafety
+```
+
+Uses the [homebrew-headphonesafety](https://github.com/kbssrikar7/homebrew-headphonesafety) tap.
+To update later: `brew update && brew upgrade --cask headphonesafety`.
+
+### Option 2: Download a release
 
 1. Download the latest `.zip` from [Releases](https://github.com/kbssrikar7/headphonesafety/releases/latest) and unzip it.
 2. Move `Headphone Safety.app` to `/Applications`.
 3. **First launch**: releases are ad-hoc signed, not notarized by Apple, so Gatekeeper will initially block the app. Right-click it → **Open** → confirm **Open** in the dialog (only needed once). Alternatively: `xattr -cr "/Applications/Headphone Safety.app"` before launching.
 
-### Option 2: Build from source
+### Option 3: Build from source
 
 ```
 git clone https://github.com/kbssrikar7/headphonesafety.git
