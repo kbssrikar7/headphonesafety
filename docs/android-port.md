@@ -180,28 +180,45 @@ raw PCM buffer is more reliable. Worth prototyping both and comparing before com
 
 ---
 
-## Play Store distribution risk — read before assuming this can just be published normally
+## Play Store distribution risk — not a hard "no," but genuinely uncertain
 
-This is a real, currently-unresolved open question, not something confirmed either way:
+This was researched twice, and the honest state of it is: **not confirmed impossible, but not
+confirmed clean either.** Be precise about what's solid versus what isn't before deciding whether
+to pursue a Play Store listing:
 
-- Google Play's Developer Policy Center has been actively tightening restrictions around
-  `MediaProjection`/screen-and-audio-capture APIs, with developers reporting rejections for
-  policy violations in this area.
-- Google's own API documentation states captured audio must not include "copyrighted material such
-  as copyrighted music or audio from movies and TV shows" for certain use cases — and **this app's
-  entire purpose is to capture and process exactly that kind of audio** (music/video playback from
-  other apps). Whether Play Store policy carves out an exception for a legitimate
-  processing-then-immediate-playback use case (as opposed to recording/storing/redistributing) is
-  not something this research confirmed either way.
-- **RootlessJamesDSP itself, the closest real precedent, is not distributed via the Play Store** —
-  it's distributed via GitHub Releases and F-Droid. This is a strong signal, though not
-  confirmation, that Play Store distribution for this category of app is either against policy or
-  considered too risky by an experienced developer in exactly this space.
+**Reasonably solid**:
+- No explicit rule was found anywhere in Google Play's Developer Content Policy banning this
+  category of app outright.
+- Audio-capture-adjacent permissions fall under Google's **restricted permissions** system, which
+  has a real, defined process: a **Permissions Declaration Form** in Play Console, where the
+  developer justifies why the permission is core to the app's functionality (often requiring a
+  video demonstration), reviewed case by case — not an automatic rejection.
 
-**Practical implication**: plan for sideloaded APK / F-Droid distribution as the realistic path
-(mirroring both RootlessJamesDSP's actual choice and this project's own macOS distribution model,
-which is also outside an app store), not Play Store, unless a specific, current policy review
-confirms otherwise before investing in a store listing.
+**Not solidly confirmed, flag as still open**:
+- One research pass turned up a claim that Google explicitly recognizes real-time,
+  capture-then-immediately-reprocess-then-output use cases (e.g. live captioning) as legitimate
+  precedent for this class of permission — which would be a strong positive signal, since it's
+  structurally identical to what this app does (no recording, no storage, no redistribution).
+  **A follow-up attempt to verify this directly against Google's primary policy pages could not
+  confirm it cleanly** — get a definitive read on this specifically (ideally by reading Google's
+  current Permissions Declaration Form guidance and restricted-permissions policy pages in full,
+  not just a search summary) before relying on it as a reason to expect approval.
+- Google's own API documentation does contain language restricting capture of "copyrighted music or
+  audio from movies and TV shows" in some contexts — whether that specific restriction actually
+  applies to a real-time-process-and-immediately-replay use case (as opposed to recording/storing)
+  was not confirmed either way.
+
+**The one concrete, unambiguous signal**: **RootlessJamesDSP itself, the closest real precedent, is
+not distributed via the Play Store** — GitHub Releases and F-Droid only. That's a real data point,
+though it's still just a signal, not proof of rejection — it could equally reflect a deliberate
+choice to avoid the review process rather than a failed attempt.
+
+**Practical implication**: don't assume either outcome. If Play Store distribution matters, budget
+for actually going through the Permissions Declaration Form process and finding out directly,
+rather than assuming rejection - but plan for sideloaded APK / F-Droid distribution as the safe
+fallback path (mirroring both RootlessJamesDSP's actual choice and this project's own macOS
+distribution model, which is also outside an app store) unless a Permissions Declaration Form
+review specifically confirms Play Store approval before investing in a store listing.
 
 ---
 
