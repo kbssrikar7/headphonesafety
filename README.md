@@ -75,7 +75,13 @@ Since this reroutes system-wide audio, correctness on the way *back* out matters
 
 ## Installation
 
-There are no prebuilt releases yet — build from source:
+### Option 1: Download a release (recommended)
+
+1. Download the latest `.zip` from [Releases](https://github.com/kbssrikar7/headphonesafety/releases/latest) and unzip it.
+2. Move `Headphone Safety.app` to `/Applications`.
+3. **First launch**: releases are ad-hoc signed, not notarized by Apple, so Gatekeeper will initially block the app. Right-click it → **Open** → confirm **Open** in the dialog (only needed once). Alternatively: `xattr -cr "/Applications/Headphone Safety.app"` before launching.
+
+### Option 2: Build from source
 
 ```
 git clone https://github.com/kbssrikar7/headphonesafety.git
