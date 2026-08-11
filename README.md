@@ -17,9 +17,16 @@ Early bootstrap. Implemented so far:
   `src/routing.rs`). Verified live, both structurally (`pw-dump` graph, sink-input linkage) and
   acoustically (a played test tone was recorded back out of the real device's monitor,
   non-silent). Run `./target/debug/headphonesafety test-routing` to exercise it manually.
+- **Real-Time Limiter** (prototype, Zam DSP): `module-ladspa-sink` hosting Zam's `ZaMaximX2`
+  true peak limiter/maximizer (see `src/limiter.rs`). Verified live with logged peak dB, not by
+  ear: a source tone at -1.1dB was capped to -10.1dB output against a -10dB ceiling. Run
+  `./target/debug/headphonesafety test-limiter` to exercise it manually. `lsp-plugins`' LADSPA
+  limiter (`lsp-plugins-ladspa.so`, label `.../limiter_stereo`) is the eventual primary DSP per
+  the plan, but has ~24 input control ports (several with LADSPA hint-decoding quirks in
+  `analyseplugin`'s output) versus Zam's clean 3 — wiring it up is follow-up work.
 
-Not yet implemented: limiter DSP insertion (`module-ladspa-sink`), tray UI, native `pipewire`
-crate migration (currently shells out to `pactl`), packaging. See the build order in
+Not yet implemented: tray UI, native `pipewire` crate migration (currently shells out to
+`pactl`), packaging, and swapping in `lsp-plugins` as the primary limiter. See the build order in
 `docs/ubuntu-port.md` and the plan this was bootstrapped from.
 
 ## Stack
@@ -28,7 +35,7 @@ crate migration (currently shells out to `pactl`), packaging. See the build orde
 |---|---|
 | Language | Rust |
 | Audio API | `pactl` shell-out (current) → native `pipewire` crate (`Registry`/`global_remove` events), planned |
-| Limiter DSP | PipeWire `module-filter-chain` hosting `lsp-plugins`' LV2 limiter, loaded/unloaded at runtime via `pactl load-module`/`unload-module` |
+| Limiter DSP | `module-ladspa-sink` (wraps `module-filter-chain` internally) hosting a single LADSPA limiter — Zam's `ZaMaximX2` initially, `lsp-plugins-ladspa`'s `limiter_stereo` planned — loaded/unloaded at runtime via `pactl load-module`/`unload-module` |
 | Tray icon | [`ksni`](https://crates.io/crates/ksni) (pure-Rust StatusNotifierItem) |
 | Packaging | `cargo-deb` → `.deb` |
 
@@ -48,7 +55,9 @@ Two signals, combined because real hardware doesn't expose them consistently:
 PipeWire version — it wraps `libpipewire-module-loopback`, and the resulting sink is named
 `input.X`. `src/routing.rs` doesn't hardcode that prefix; it looks the sink up by matching its
 `pulse.module.id` property back to the module it just loaded, so it stays correct even if the
-naming convention changes in a future PipeWire release.
+naming convention changes in a future PipeWire release. (`module-ladspa-sink`, used by the
+limiter, does **not** apply this prefix — the sink is named exactly `sink_name=`. The
+`pulse.module.id` lookup handles both without needing to know which.)
 
 ## Running
 

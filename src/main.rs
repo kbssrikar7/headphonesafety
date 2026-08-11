@@ -1,18 +1,21 @@
+mod limiter;
 mod pactl;
 mod routing;
 mod settings;
 mod volume_cap;
 
 use settings::Settings;
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(350);
 
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("test-routing") {
-        test_routing();
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("test-routing") => return test_routing(),
+        Some("test-limiter") => return test_limiter(),
+        _ => {}
     }
 
     let settings = Settings::from_env();
@@ -55,4 +58,88 @@ fn test_routing() {
 
     routing::revert(&route).expect("revert to master");
     println!("reverted to {} and unloaded module (readback-confirmed)", master);
+}
+
+/// Manual verification of the Real-Time Limiter (build-order step 4): loads the ZaMaximX2-backed
+/// limiter at a -10dB headroom preset, plays a deliberately loud (boosted, clipping-range) test
+/// tone through it, and logs the recorded peak dB before/after — per docs/ubuntu-port.md's
+/// testing checklist, this must be verified by logged levels, not "sounds a bit quieter" by ear.
+/// Temporarily sets the real device's volume to 100% so the measurement isn't confounded by
+/// Volume Cap's own attenuation, and restores it afterward.
+fn test_limiter() {
+    let headroom_db = 10.0;
+    let master = pactl::default_sink_name().expect("read default sink");
+    let orig_volume = pactl::list_sinks()
+        .expect("list sinks")
+        .into_iter()
+        .find(|s| s["name"] == master)
+        .and_then(|s| s["volume"]["front-left"]["value_percent"].as_str().map(str::to_owned))
+        .expect("read master volume");
+    println!("master sink: {master} (original volume {orig_volume}, headroom {headroom_db} dB)");
+
+    pactl::run(&["set-sink-volume", &master, "100%"]).expect("set master to 100% for clean measurement");
+
+    let route = limiter::load(&master, headroom_db, "hps_limiter").expect("load limiter");
+    println!("loaded module {} -> sink {}", route.module_id, route.sink_name);
+    routing::set_default(&route.sink_name).expect("switch to limiter");
+
+    let tone = "/tmp/hps_test_tone.wav";
+    let recorded = "/tmp/hps_test_recorded.wav";
+    Command::new("ffmpeg")
+        .args([
+            "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=3:sample_rate=48000",
+            "-af", "volume=20dB", "-ac", "2", tone,
+        ])
+        .output()
+        .expect("generate test tone");
+    let source_peak = measure_peak_db(tone).expect("measure source peak");
+    println!("source tone peak: {source_peak:.1} dB (before limiting)");
+
+    // Warm up the ALSA sink from SUSPENDED before the timed recording window.
+    Command::new("paplay").args(["--device", &route.sink_name, tone]).status().ok();
+
+    let mut rec = Command::new("parecord")
+        .args(["--file-format=wav", "--device", &format!("{master}.monitor"), recorded])
+        .spawn()
+        .expect("start parecord");
+    thread::sleep(Duration::from_secs(1));
+    Command::new("paplay").args(["--device", &route.sink_name, tone]).status().expect("play test tone");
+    thread::sleep(Duration::from_secs(1));
+    interrupt(rec.id());
+    rec.wait().ok();
+
+    let recorded_peak = measure_peak_db(recorded).expect("measure recorded peak");
+    println!("recorded peak after limiting: {recorded_peak:.1} dB (ceiling was {:.1} dB)", -headroom_db);
+    if recorded_peak > -headroom_db + 1.0 {
+        eprintln!("WARNING: recorded peak exceeds the ceiling by more than 1dB tolerance — limiter may not be capping correctly");
+    } else {
+        println!("OK: recorded peak holds at/below the ceiling (within tolerance)");
+    }
+
+    routing::revert(&route).expect("revert to master");
+    pactl::run(&["set-sink-volume", &master, &orig_volume]).expect("restore master volume");
+    println!("reverted to {master} and restored volume to {orig_volume}");
+
+    std::fs::remove_file(tone).ok();
+    std::fs::remove_file(recorded).ok();
+}
+
+/// Sends SIGINT (not SIGTERM) so `parecord` finalizes the WAV file's data/duration cleanly on
+/// exit instead of leaving a header-only truncated file — confirmed live during step 3 testing.
+fn interrupt(pid: u32) {
+    Command::new("kill").args(["-INT", &pid.to_string()]).status().ok();
+}
+
+fn measure_peak_db(path: &str) -> Option<f64> {
+    let output = Command::new("ffmpeg")
+        .args(["-i", path, "-af", "volumedetect", "-f", "null", "-"])
+        .output()
+        .ok()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stderr.lines().find_map(|line| {
+        let line = line.trim();
+        let rest = line.strip_prefix("[Parsed_volumedetect_0")?;
+        let (_, after) = rest.split_once("max_volume:")?;
+        after.trim().trim_end_matches(" dB").parse::<f64>().ok()
+    })
 }
