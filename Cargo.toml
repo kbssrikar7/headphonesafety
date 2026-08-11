@@ -1,0 +1,13 @@
+[package]
+name = "headphonesafety-linux"
+version = "0.1.0"
+edition = "2024"
+description = "Real-time headphone volume/loudness protection for Linux, bringing iOS's Reduce Loud Sounds behavior to the desktop."
+license = "MIT"
+
+[[bin]]
+name = "headphonesafety"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
