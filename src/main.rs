@@ -1,5 +1,6 @@
 mod limiter;
 mod pactl;
+mod pw_client;
 mod routing;
 mod settings;
 mod volume_cap;
@@ -15,6 +16,7 @@ fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("test-routing") => return test_routing(),
         Some("test-limiter") => return test_limiter(),
+        Some("test-watcher") => return test_watcher(),
         _ => {}
     }
 
@@ -128,6 +130,56 @@ fn test_limiter() {
 /// exit instead of leaving a header-only truncated file — confirmed live during step 3 testing.
 fn interrupt(pid: u32) {
     Command::new("kill").args(["-INT", &pid.to_string()]).status().ok();
+}
+
+/// Manual verification of the native `pipewire` registry watcher (build-order step 5, device-
+/// tracking half): confirms the event-driven removal detection actually fires on a real removal,
+/// without ever touching the machine's default sink (unlike test-routing/test-limiter, this test
+/// never calls `set-default-sink`, so it's safe to run even with audio actively playing).
+///
+/// Loads a disposable null-sink, gives the watcher time to observe its `global` event and cache
+/// its name, unloads it, then waits for the corresponding removal event — proving detection is
+/// real (a `global_remove` for an id the watcher's cache actually held), not just "the channel
+/// didn't error."
+fn test_watcher() {
+    let rx = pw_client::spawn_sink_removal_watcher();
+    println!("watcher thread started, connecting to pipewire...");
+    thread::sleep(Duration::from_millis(500));
+
+    let sink_name = "hps_watch_test";
+    let module_id = pactl::run(&["load-module", "module-null-sink", &format!("sink_name={sink_name}")])
+        .expect("load test null-sink")
+        .trim()
+        .to_string();
+    println!("loaded disposable null-sink {sink_name} (module {module_id})");
+
+    // Give the watcher time to receive and cache this node's `global` event before it's removed.
+    thread::sleep(Duration::from_millis(500));
+
+    // Nothing should have been reported yet — the sink is still present.
+    match rx.try_recv() {
+        Ok(name) => eprintln!("WARNING: unexpected removal event for {name} before anything was removed"),
+        Err(_) => println!("OK: no spurious removal event while the sink still exists"),
+    }
+
+    pactl::run(&["unload-module", &module_id]).expect("unload test null-sink");
+    println!("unloaded {sink_name}, waiting for the watcher to notice...");
+
+    let deadline = Duration::from_secs(3);
+    let start = std::time::Instant::now();
+    loop {
+        match rx.recv_timeout(deadline.saturating_sub(start.elapsed())) {
+            Ok(name) if name == sink_name => {
+                println!("OK: watcher reported removal of {name} (event-driven, no polling)");
+                return;
+            }
+            Ok(other) => println!("(ignoring removal event for unrelated sink {other})"),
+            Err(_) => {
+                eprintln!("FAIL: no removal event for {sink_name} within {deadline:?}");
+                return;
+            }
+        }
+    }
 }
 
 fn measure_peak_db(path: &str) -> Option<f64> {

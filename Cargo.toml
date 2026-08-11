@@ -10,4 +10,5 @@ name = "headphonesafety"
 path = "src/main.rs"
 
 [dependencies]
+pipewire = "0.10.0"
 serde_json = "1"
