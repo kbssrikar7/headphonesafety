@@ -27,6 +27,7 @@ priority = "optional"
 assets = [
     ["target/release/headphonesafety", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/headphonesafety-linux/README.md", "644"],
+    ["packaging/headphonesafety.desktop", "usr/share/applications/", "644"],
 ]
 # pactl/wpctl (shell-out control plane), the PipeWire session itself, and the LADSPA limiter
 # plugin the app currently hosts (zam-plugins' ZaMaximX2) -- none of these are shared libraries

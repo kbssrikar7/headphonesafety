@@ -45,12 +45,16 @@ as the routed device, the limiter enabled via a real tray click (simulated over 
 yanked out from under it mid-route. The watcher fired, reverted to the correct fallback device, and
 the tray status updated to reflect it — no leftover modules, no hang.
 
-Not yet implemented: `lsp-plugins` as the primary limiter DSP (see above), a persisted settings
-file (toggle/headroom state resets on restart), and following the live default sink if the user
-switches output devices while the limiter is *not* active and the app is mid-session (Volume Cap
-does follow it; the limiter's cached `master_sink` doesn't re-resolve until restart). See
-`docs/ubuntu-port.md` for the original architecture research and `src/routing.rs`/`src/limiter.rs`
-for what actually shipped.
+The limiter targets whichever output device is actually active *at the moment you enable it*
+(re-resolved on each toggle, not cached at process startup — an earlier version cached it once at
+startup, which meant enabling the limiter after switching to different headphones mid-session
+silently kept protecting the old device; fixed after catching it live with real Bluetooth
+headphones connected). Its virtual sink shows up in system volume controls (e.g. GNOME Settings →
+Sound) as `Headphone_Safety_Limiter` while active, not the raw `hps_limiter` module name.
+
+Not yet implemented: `lsp-plugins` as the primary limiter DSP (see above), and a persisted
+settings file (toggle/headroom state resets on restart). See `docs/ubuntu-port.md` for the
+original architecture research and `src/routing.rs`/`src/limiter.rs` for what actually shipped.
 
 ### Testing checklist (from `docs/ubuntu-port.md`)
 
@@ -101,7 +105,7 @@ PipeWire version — it wraps `libpipewire-module-loopback`, and the resulting s
 `input.X`. `src/routing.rs` doesn't hardcode that prefix; it looks the sink up by matching its
 `pulse.module.id` property back to the module it just loaded, so it stays correct even if the
 naming convention changes in a future PipeWire release. (`module-ladspa-sink`, used by the
-limiter, does **not** apply this prefix — the sink is named exactly `sink_name=`. The
+limiter, does **not** apply this prefix — the sink is named exactly `sink_name`. The
 `pulse.module.id` lookup handles both without needing to know which.)
 
 ## Building
@@ -145,6 +149,24 @@ sudo dpkg -i target/debian/headphonesafety-linux_*.deb
 `cargo deb`'s `Depends` covers everything needed at runtime (see `[package.metadata.deb]` in
 `Cargo.toml`) — a machine with just the `.deb` installed doesn't need the build-time
 `libclang-dev`/`clang`/`libpipewire-0.3-dev` packages above, those are compile-time only.
+
+The package also installs `/usr/share/applications/headphonesafety.desktop`, so it shows up as a
+regular launchable app (e.g. in GNOME's Activities search) — but installing the `.deb` does
+**not** make it start automatically at login by itself; that's opt-in (see below), matching how
+the macOS build treats "Launch at login" as a documented optional step rather than automatic.
+
+### Launch at login (optional)
+
+```
+mkdir -p ~/.config/autostart
+cp /usr/share/applications/headphonesafety.desktop ~/.config/autostart/
+```
+
+To undo:
+
+```
+rm ~/.config/autostart/headphonesafety.desktop
+```
 
 ## License
 
