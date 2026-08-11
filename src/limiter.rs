@@ -21,6 +21,11 @@ use pactl::Result;
 const PLUGIN: &str = "ZaMaximX2-ladspa";
 const LABEL: &str = "ZaMaximX2";
 const DEFAULT_RELEASE: f64 = 3.16228;
+// Underscores, not spaces: `sink_properties=device.description="X Y"` gets silently truncated
+// at the first space by pactl's module-argument parser even when quoted (confirmed live, both
+// single- and double-quoted) — passed as a single argv element with no shell involved to do the
+// quoting pactl seems to expect, so the value has to be space-free instead of fighting that.
+const FRIENDLY_DESCRIPTION: &str = "Headphone_Safety_Limiter";
 
 /// Loads the limiter over `master_sink`, capping output peaks at `headroom_db` below max.
 /// Returns a `routing::Route` — same shape as the plumbing-only passthrough, so
@@ -36,6 +41,7 @@ pub fn load(master_sink: &str, headroom_db: f64, sink_name_hint: &str) -> Result
         &format!("plugin={PLUGIN}"),
         &format!("label={LABEL}"),
         &format!("control={DEFAULT_RELEASE},{ceiling:.2},{ceiling:.2}"),
+        &format!("sink_properties=device.description={FRIENDLY_DESCRIPTION}"),
     ])?
     .trim()
     .to_string();

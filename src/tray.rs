@@ -18,9 +18,15 @@ pub struct AppTray {
     pub volume_cap_enabled: bool,
     pub limiter_enabled: bool,
     pub headroom_db: f64,
-    /// The real output device, cached once at startup (hard-won lesson #3: cache identifiers
-    /// while everything is healthy, rather than re-resolving "the default sink" later — once the
-    /// limiter is routed, the default sink *is* our virtual sink, not the real device).
+    /// The real output device the limiter targets. Re-resolved to the *current* default sink
+    /// every time the limiter is turned on (see `toggle_limiter`) — not cached once at process
+    /// startup. An earlier version cached this only at startup, which meant enabling the limiter
+    /// after switching to a different output device (e.g. connecting Bluetooth headphones after
+    /// the app had already started against the laptop speakers) silently kept protecting the old
+    /// device instead of the one actually in use — confirmed live as a real bug, not a
+    /// hypothetical. Once a route is active, this is that route's `master_sink` and stays fixed
+    /// for the lifetime of that route (hard-won lesson #3 still applies *within* one route: don't
+    /// re-resolve the identifier you're actively routing through).
     pub master_sink: String,
     /// Present while the Real-Time Limiter is actively routed through a virtual sink.
     pub limiter_route: Option<routing::Route>,
@@ -49,10 +55,22 @@ impl AppTray {
             return;
         }
 
+        let current_default = match pactl::default_sink_name() {
+            Ok(name) => name,
+            Err(e) => {
+                self.status = format!("failed to read current output device: {e}");
+                return;
+            }
+        };
+        self.master_sink = current_default;
+
         match limiter::load(&self.master_sink, self.headroom_db, "hps_limiter") {
             Ok(route) => match routing::set_default(&route.sink_name) {
                 Ok(()) => {
-                    self.status = format!("Real-Time Limiter on ({:.0} dB headroom)", self.headroom_db);
+                    self.status = format!(
+                        "Real-Time Limiter on ({:.0} dB headroom, protecting {})",
+                        self.headroom_db, route.master_sink
+                    );
                     self.limiter_route = Some(route);
                     self.limiter_enabled = true;
                 }
@@ -91,9 +109,20 @@ impl ksni::Tray for AppTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
+        // Live, not cached: shows what's actually plugged in *right now* if the limiter is off
+        // (so this doesn't repeat the bug where a stale device name was displayed/targeted), or
+        // the device the active route is actually protecting if it's on.
+        let device_label = match &self.limiter_route {
+            Some(route) => format!("Protecting: {}", route.master_sink),
+            None => match pactl::default_sink_name() {
+                Ok(name) => format!("Current output: {name}"),
+                Err(_) => "Current output: unknown".into(),
+            },
+        };
+
         vec![
             StandardItem {
-                label: format!("Device: {}", self.master_sink),
+                label: device_label,
                 enabled: false,
                 ..Default::default()
             }
