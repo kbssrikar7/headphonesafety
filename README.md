@@ -159,6 +159,25 @@ Sources/HeadphoneSafety/
 └── Settings.swift           UserDefaults-backed user preferences
 ```
 
+## Porting to other platforms
+
+This is a macOS-only app, but the underlying idea — a real-time peak limiter for hearing
+protection — isn't inherently platform-specific. Researched (not built) implementation guides for
+other platforms live in [`docs/`](docs), each covering the relevant platform's audio APIs,
+permission model, a suggested architecture, and the rollback/safety lessons learned building this
+version:
+
+- [Windows](docs/windows-port.md) — via a Windows Audio Processing Object, with real-world
+  precedent ([Equalizer APO](https://sourceforge.net/projects/equalizerapo/)) showing it's
+  achievable without a permission prompt at runtime.
+- [Ubuntu / Linux](docs/ubuntu-port.md) — the most favorable of the platforms researched;
+  PipeWire's built-in monitor sources need no virtual driver and, for a native (non-Flatpak) app,
+  no permission prompt at all.
+- [Android](docs/android-port.md) — the most restrictive of the four; Android is adding this
+  natively (Sound Dose / Hearing Wellness) with no public API to extend it, and the real-time
+  limiter path has real constraints (some apps opt out of capture entirely, a Developer Options
+  requirement on Android 15+, and open questions around Play Store distribution).
+
 ## Acknowledgments
 
 - [BlackHole](https://github.com/ExistentialAudio/BlackHole) by Existential Audio — the virtual loopback driver the Real-Time Limiter depends on. Not bundled with this project; install separately via Homebrew.
