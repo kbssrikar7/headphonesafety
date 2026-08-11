@@ -7,39 +7,72 @@ this build follows.
 
 ## Status
 
-Early bootstrap. Implemented so far:
+Feature-complete end-to-end daemon, packaged as a `.deb`. All pieces below are wired together and
+live-verified as one running application, not standalone prototypes:
 
-- **Volume Cap** (prototype): polls the default sink via `pactl` every ~350ms, detects
-  headphone-classified sinks, and clamps volume to a configurable headroom below max. Verified
-  live against this machine's PipeWire 1.0.5 / `pactl 16.1` stack.
-- **Routing plumbing** (prototype, no DSP yet): `module-virtual-sink` load/switch/revert cycle,
-  with every state change verified via readback and reverts retried until they land (see
-  `src/routing.rs`). Verified live, both structurally (`pw-dump` graph, sink-input linkage) and
-  acoustically (a played test tone was recorded back out of the real device's monitor,
-  non-silent). Run `./target/debug/headphonesafety test-routing` to exercise it manually.
-- **Real-Time Limiter** (prototype, Zam DSP): `module-ladspa-sink` hosting Zam's `ZaMaximX2`
-  true peak limiter/maximizer (see `src/limiter.rs`). Verified live with logged peak dB, not by
-  ear: a source tone at -1.1dB was capped to -10.1dB output against a -10dB ceiling. Run
-  `./target/debug/headphonesafety test-limiter` to exercise it manually. `lsp-plugins`' LADSPA
-  limiter (`lsp-plugins-ladspa.so`, label `.../limiter_stereo`) is the eventual primary DSP per
-  the plan, but has ~24 input control ports (several with LADSPA hint-decoding quirks in
-  `analyseplugin`'s output) versus Zam's clean 3 — wiring it up is follow-up work.
+- **Volume Cap**: polls the real output device via `pactl` every ~350ms (`src/volume_cap.rs`),
+  detects headphone-classified sinks, clamps volume to a configurable headroom below max. Targets
+  the real device explicitly rather than "whatever the default sink is," since the default sink
+  becomes the virtual routing sink while the limiter is active.
+- **Real-Time Limiter**: `module-ladspa-sink` hosting Zam's `ZaMaximX2` true peak limiter
+  (`src/limiter.rs`). Verified with logged peak dB, not by ear: a -1.1dB source tone came out at
+  -10.1dB against a -10dB ceiling. `lsp-plugins-ladspa`'s `limiter_stereo` is the eventual primary
+  DSP (see `docs/ubuntu-port.md`) but has ~24 input control ports vs. Zam's clean 3 — swapping it
+  in is follow-up work.
+- **Device-removal watcher**: a native `pipewire` crate registry watcher on its own thread
+  (`src/pw_client.rs`), reporting Audio/Sink removals event-driven, no polling. Wired into the
+  daemon loop: when the *currently routed* device disappears, `routing::revert_to_fallback`
+  switches to another real, available sink (ranked by PipeWire's own `priority.session`, not just
+  "any non-Bluetooth sink" — an earlier version of this picked an unplugged HDMI output and
+  silently failed to switch) and unloads the now-dangling module.
+- **Startup crash recovery**: `routing::cleanup_stray_routes`, run before anything else at daemon
+  startup, matching the macOS README's documented guarantee. Empirically necessary: force-killing
+  the daemon while routed left a dangling `module-ladspa-sink` with the default sink still pointed
+  at it; confirmed the next startup detects and cleans this up automatically.
+- **Tray UI**: a StatusNotifierItem via `ksni` (`src/tray.rs`) — device status, live status line,
+  Volume Cap toggle, Real-Time Limiter toggle, headroom radio group, Quit. `AppTray` is the app's
+  single source of truth for runtime state (see the module doc comment for why no separate
+  `Arc<Mutex<_>>` is needed). Confirmed registered correctly with GNOME's `StatusNotifierWatcher`.
+- **Packaging**: `cargo-deb` → `.deb`, with explicit `Depends` on `pipewire-pulse`, `wireplumber`,
+  `pulseaudio-utils`, and `zam-plugins` (none of these are shared libraries cargo-deb's automatic
+  ELF dependency detection can see) plus auto-detected `libpipewire-0.3-0`/`libc6`.
 
-- **Device-removal watcher** (native `pipewire` crate, event-driven): `src/pw_client.rs` runs a
-  registry watcher on its own thread and reports the `node.name` of any Audio/Sink node removed
-  from the graph — no polling, no querying the device mid-removal (hard-won lessons #3/#4). Volume
-  Cap deliberately stays on `pactl` for now: it already works correctly and gains nothing
-  safety-wise from migrating, whereas removal detection is something the shell-out approach
-  structurally cannot do (no way to subscribe to an event via subprocess polling). Verified live
-  with a disposable null-sink: silent while it existed, correctly reported its removal the moment
-  it was unloaded. Run `./target/debug/headphonesafety test-watcher` to exercise it manually (safe
-  to run with audio playing — unlike the other `test-*` commands, it never touches the default
-  sink).
+**Verified live**, including the scenario this whole project exists for: a fake headphone
+(reversible null-sink, since no physical Bluetooth hardware was available to test with — this is
+the one item on the checklist below that's simulated rather than done with real hardware) was set
+as the routed device, the limiter enabled via a real tray click (simulated over D-Bus with
+`busctl` + `com.canonical.dbusmenu`, exactly the protocol a real click sends), then the device was
+yanked out from under it mid-route. The watcher fired, reverted to the correct fallback device, and
+the tray status updated to reflect it — no leftover modules, no hang.
 
-Not yet implemented: tray UI, wiring the watcher to actually call `routing::revert` when the
-*routed* device disappears (today it only reports removals; nothing consumes that yet),
-packaging, and swapping in `lsp-plugins` as the primary limiter. See the build order in
-`docs/ubuntu-port.md` and the plan this was bootstrapped from.
+Not yet implemented: `lsp-plugins` as the primary limiter DSP (see above), a persisted settings
+file (toggle/headroom state resets on restart), and following the live default sink if the user
+switches output devices while the limiter is *not* active and the app is mid-session (Volume Cap
+does follow it; the limiter's cached `master_sink` doesn't re-resolve until restart). See
+`docs/ubuntu-port.md` for the original architecture research and `src/routing.rs`/`src/limiter.rs`
+for what actually shipped.
+
+### Testing checklist (from `docs/ubuntu-port.md`)
+
+- [x] Volume Cap clamps correctly on a headphone-classified sink, leaves speakers untouched.
+- [x] Real-Time Limiter is audible and does not silently do nothing.
+- [x] Confirmed via logged peak values that a loud/clipping input is actually capped at the
+      output, not just passed through quieter.
+- [x] Toggling the limiter off (via a real tray click) reverts the default sink cleanly and
+      promptly (sub-second).
+- [x] Force-killing the process while the limiter is active does not leave the system silently
+      stuck — confirmed the *next launch* detects and cleans it up (see "Startup crash recovery").
+- [x] Disconnecting headphones while the limiter is active reverts to a safe output device
+      automatically without hanging — verified via a reversible simulated disconnect (see above);
+      **not yet verified against real Bluetooth hardware**.
+- [x] No component of the rollback path performs a live/synchronous query against a device or
+      node that might be mid-removal — by construction (the watcher caches names from `global`
+      and reacts to bare `global_remove` ids; `pick_fallback_sink` only ever queries *other*,
+      still-present sinks).
+- [x] No permission prompt appears during normal operation, on a natively-packaged (`.deb`,
+      non-Flatpak) install — confirmed throughout development; nothing in this app's operation
+      path (pactl, native `pipewire` registry access, D-Bus tray registration) is gated behind a
+      permission the user has to grant.
 
 ## Stack
 
@@ -84,14 +117,34 @@ sudo apt-get install -y libpipewire-0.3-dev pkg-config libclang-dev clang
 `stdbool.h` not found error from inside `libspa-sys`'s build script, not an obviously
 pipewire-related message.)
 
-## Running
+## Running from source
 
 ```
 cargo build
 HPS_HEADROOM_DB=10 ./target/debug/headphonesafety
 ```
 
-`HPS_HEADROOM_DB` sets the cap in dB below max (macOS presets: 0, 5, 10, 15, 20). Defaults to 10.
+`HPS_HEADROOM_DB` sets the *initial* cap in dB below max (macOS presets: 0, 5, 10, 15, 20);
+change it afterward from the tray menu. Runs as a tray-only app — no terminal UI beyond startup
+logging — so look for the headphones icon (GNOME needs the `ubuntu-appindicators` extension, or
+equivalent, active to render `StatusNotifierItem` tray icons; this ships active by default on
+Ubuntu).
+
+Manual verification subcommands for individual pieces (each prints what it's doing and cleans up
+after itself): `test-routing`, `test-limiter`, `test-watcher`.
+
+## Packaging
+
+```
+cargo install cargo-deb   # one-time
+cargo build --release
+cargo deb --no-build
+sudo dpkg -i target/debian/headphonesafety-linux_*.deb
+```
+
+`cargo deb`'s `Depends` covers everything needed at runtime (see `[package.metadata.deb]` in
+`Cargo.toml`) — a machine with just the `.deb` installed doesn't need the build-time
+`libclang-dev`/`clang`/`libpipewire-0.3-dev` packages above, those are compile-time only.
 
 ## License
 

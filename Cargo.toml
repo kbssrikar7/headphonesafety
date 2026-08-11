@@ -13,3 +13,24 @@ path = "src/main.rs"
 ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
 pipewire = "0.10.0"
 serde_json = "1"
+
+[package.metadata.deb]
+maintainer = "Headphone Safety"
+copyright = "2026, Headphone Safety contributors"
+extended-description = """\
+Real-time headphone volume/loudness protection for Linux, bringing iOS's \
+"Reduce Loud Sounds" behavior to the desktop. Caps output volume on headphone-\
+classified devices (Volume Cap) and, optionally, applies true peak limiting to \
+the actual audio signal (Real-Time Limiter) via a PipeWire LADSPA sink."""
+section = "sound"
+priority = "optional"
+assets = [
+    ["target/release/headphonesafety", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/headphonesafety-linux/README.md", "644"],
+]
+# pactl/wpctl (shell-out control plane), the PipeWire session itself, and the LADSPA limiter
+# plugin the app currently hosts (zam-plugins' ZaMaximX2) -- none of these are shared libraries
+# the binary links against, so cargo-deb's automatic ELF dependency detection can't find them;
+# they have to be declared explicitly. libpipewire-0.3-0 *is* auto-detected from the binary's
+# ELF NEEDED entries, not listed here.
+depends = "$auto, pipewire-pulse, wireplumber, pulseaudio-utils, zam-plugins"
