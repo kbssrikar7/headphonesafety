@@ -56,14 +56,18 @@ fn set_volume_db(sink_name: &str, db: f64) -> Result<()> {
     Ok(())
 }
 
-/// One poll tick: reads the default sink, and if it's headphone-classified and over the cap,
-/// clamps it. Returns `Some(ClampEvent)` when a clamp actually happened, `None` otherwise
-/// (not headphones, already under the cap, or a transient read/write error worth logging but
-/// not fatal to the poll loop).
-pub fn enforce_cap(headroom_db: f64) -> Result<Option<ClampEvent>> {
-    let default_name = pactl::default_sink_name()?;
+/// One poll tick: reads `sink_name`'s current volume, and if it's headphone-classified and over
+/// the cap, clamps it. Returns `Some(ClampEvent)` when a clamp actually happened, `None`
+/// otherwise (not headphones, already under the cap, sink not found, or a transient read/write
+/// error worth logging but not fatal to the poll loop).
+///
+/// Takes an explicit `sink_name` rather than always checking `pactl`'s live default sink: once
+/// the Real-Time Limiter is routed, the default sink *is* the virtual routing sink, not the real
+/// device — volume needs to be capped on the real device regardless of whether the limiter is
+/// currently active, so callers pass the cached real device name (see `tray::AppTray::master_sink`).
+pub fn enforce_cap(sink_name: &str, headroom_db: f64) -> Result<Option<ClampEvent>> {
     let sinks = pactl::list_sinks()?;
-    let Some(sink) = sinks.iter().find(|s| s["name"] == default_name) else {
+    let Some(sink) = sinks.iter().find(|s| s["name"] == sink_name) else {
         return Ok(None);
     };
 
@@ -80,9 +84,9 @@ pub fn enforce_cap(headroom_db: f64) -> Result<Option<ClampEvent>> {
         return Ok(None);
     }
 
-    set_volume_db(&default_name, ceiling)?;
+    set_volume_db(sink_name, ceiling)?;
     Ok(Some(ClampEvent {
-        sink_name: default_name,
+        sink_name: sink_name.to_string(),
         from_db: db,
         to_db: ceiling,
     }))

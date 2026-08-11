@@ -1,15 +1,12 @@
-/// User-configurable preferences for Volume Cap and the Real-Time Limiter.
+/// Startup preferences for Volume Cap and the Real-Time Limiter.
 ///
-/// Headroom presets mirror the macOS app's dB-below-max options. This is deliberately minimal —
-/// a persisted config file arrives with the tray UI (build-order step 6), which is also what
-/// will actually read/write `limiter_enabled`: the limiter itself (`limiter.rs`) and the removal
-/// watcher (`pw_client.rs`) both exist as standalone, live-verified pieces already, but nothing
-/// wires this flag to them yet — that wiring is the tray toggle's job.
+/// Headroom presets mirror the macOS app's dB-below-max options. Only the *initial* values live
+/// here — at runtime, `tray::AppTray` is the single source of truth for toggle state (see its
+/// doc comment for why), read and mutated through its `ksni::Handle`. A persisted config file
+/// (so preferences survive a restart) is follow-up work.
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
     pub volume_cap_enabled: bool,
-    #[allow(dead_code)] // wired up by the tray toggle in build-order step 6
-    pub limiter_enabled: bool,
     pub headroom_db: f64,
 }
 
@@ -17,7 +14,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume_cap_enabled: true,
-            limiter_enabled: false,
             headroom_db: 10.0,
         }
     }

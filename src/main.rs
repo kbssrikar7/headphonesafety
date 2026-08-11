@@ -3,12 +3,15 @@ mod pactl;
 mod pw_client;
 mod routing;
 mod settings;
+mod tray;
 mod volume_cap;
 
+use ksni::blocking::TrayMethods;
 use settings::Settings;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use tray::AppTray;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(350);
 
@@ -19,25 +22,80 @@ fn main() {
         Some("test-watcher") => return test_watcher(),
         _ => {}
     }
+    run_daemon();
+}
+
+/// The long-running daemon: tray UI, Volume Cap poll loop, and the device-removal watcher's
+/// auto-revert, all coordinated through the tray's `Handle` (see `tray.rs` for why that's the
+/// single source of truth instead of a separate `Arc<Mutex<_>>`).
+fn run_daemon() {
+    if let Err(e) = routing::cleanup_stray_routes() {
+        eprintln!("startup cleanup check failed (continuing anyway): {e}");
+    }
 
     let settings = Settings::from_env();
+    let master = pactl::default_sink_name().expect("read default sink at startup");
     println!(
-        "headphonesafety: Volume Cap prototype running (headroom {:.1} dB below max, polling every {}ms)",
+        "headphonesafety: starting (device: {master}, headroom {:.1} dB below max, polling every {}ms)",
         settings.headroom_db,
         POLL_INTERVAL.as_millis()
     );
 
+    let app_tray = AppTray::new(master, settings.headroom_db, settings.volume_cap_enabled);
+    let handle = app_tray.spawn().expect("spawn tray service");
+
+    let removals = pw_client::spawn_sink_removal_watcher();
+
     loop {
-        if settings.volume_cap_enabled {
-            match volume_cap::enforce_cap(settings.headroom_db) {
-                Ok(Some(event)) => println!(
-                    "clamped {}: {:.2} dB -> {:.2} dB",
-                    event.sink_name, event.from_db, event.to_db
-                ),
+        let (cap_enabled, headroom, limiter_master) = handle
+            .update(|tray: &mut AppTray| {
+                (
+                    tray.volume_cap_enabled,
+                    tray.headroom_db,
+                    tray.limiter_route.as_ref().map(|r| r.master_sink.clone()),
+                )
+            })
+            .unwrap_or((settings.volume_cap_enabled, settings.headroom_db, None));
+
+        // Cap the real device's volume. While the limiter is routed, the default sink *is* the
+        // virtual routing sink, not the real device, so target the limiter's cached master
+        // instead of re-asking pactl for "the default sink" in that case.
+        if cap_enabled {
+            let target = match &limiter_master {
+                Some(m) => Ok(m.clone()),
+                None => pactl::default_sink_name(),
+            };
+            match target.and_then(|t| volume_cap::enforce_cap(&t, headroom)) {
+                Ok(Some(event)) => {
+                    let status = format!(
+                        "clamped {}: {:.1} dB -> {:.1} dB",
+                        event.sink_name, event.from_db, event.to_db
+                    );
+                    println!("{status}");
+                    handle.update(|tray: &mut AppTray| tray.status = status);
+                }
                 Ok(None) => {}
                 Err(e) => eprintln!("volume_cap tick failed (will retry next poll): {e}"),
             }
         }
+
+        // React to any device removal matching whatever we're currently routed through — hard-won
+        // lesson #4: react unconditionally on the cached name, never re-query the vanished device.
+        while let Ok(removed_name) = removals.try_recv() {
+            if limiter_master.as_deref() == Some(removed_name.as_str()) {
+                println!("device removed while routed ({removed_name}) — reverting to a fallback device");
+                handle.update(|tray: &mut AppTray| {
+                    if let Some(route) = tray.limiter_route.take() {
+                        tray.status = match routing::revert_to_fallback(&route) {
+                            Ok(fallback) => format!("Real-Time Limiter off (device removed, fell back to {fallback})"),
+                            Err(e) => format!("device removed and fallback failed: {e}"),
+                        };
+                        tray.limiter_enabled = false;
+                    }
+                });
+            }
+        }
+
         thread::sleep(POLL_INTERVAL);
     }
 }
