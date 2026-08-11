@@ -12,10 +12,15 @@ Early bootstrap. Implemented so far:
 - **Volume Cap** (prototype): polls the default sink via `pactl` every ~350ms, detects
   headphone-classified sinks, and clamps volume to a configurable headroom below max. Verified
   live against this machine's PipeWire 1.0.5 / `pactl 16.1` stack.
+- **Routing plumbing** (prototype, no DSP yet): `module-virtual-sink` load/switch/revert cycle,
+  with every state change verified via readback and reverts retried until they land (see
+  `src/routing.rs`). Verified live, both structurally (`pw-dump` graph, sink-input linkage) and
+  acoustically (a played test tone was recorded back out of the real device's monitor,
+  non-silent). Run `./target/debug/headphonesafety test-routing` to exercise it manually.
 
-Not yet implemented: Real-Time Limiter, tray UI, native `pipewire` crate migration (currently
-shells out to `pactl`), packaging. See the build order in `docs/ubuntu-port.md` and the plan this
-was bootstrapped from.
+Not yet implemented: limiter DSP insertion (`module-ladspa-sink`), tray UI, native `pipewire`
+crate migration (currently shells out to `pactl`), packaging. See the build order in
+`docs/ubuntu-port.md` and the plan this was bootstrapped from.
 
 ## Stack
 
@@ -36,6 +41,14 @@ Two signals, combined because real hardware doesn't expose them consistently:
 - Wired jacks on combo ALSA sinks (confirmed on this laptop's "Speaker + Headphones" device, which
   has **no** `device.form_factor` property at all): `active_port` flips between `[Out] Speaker`
   and `[Out] Headphones` on physical jack insertion — that's the reliable signal here.
+
+## Routing (how the passthrough sink actually gets named)
+
+`module-virtual-sink sink_name=X master=Y` does **not** create a sink literally named `X` on this
+PipeWire version — it wraps `libpipewire-module-loopback`, and the resulting sink is named
+`input.X`. `src/routing.rs` doesn't hardcode that prefix; it looks the sink up by matching its
+`pulse.module.id` property back to the module it just loaded, so it stays correct even if the
+naming convention changes in a future PipeWire release.
 
 ## Running
 

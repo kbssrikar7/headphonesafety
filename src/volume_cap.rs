@@ -4,45 +4,15 @@
 //! Shell-out prototype (`pactl`) per the build order in docs/ubuntu-port.md — this gets replaced
 //! by a native `pipewire` crate client (event-driven, no polling) once the plumbing is proven.
 
+use crate::pactl;
+use pactl::Result;
 use serde_json::Value;
-use std::error::Error;
-use std::process::Command;
-
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Debug)]
 pub struct ClampEvent {
     pub sink_name: String,
     pub from_db: f64,
     pub to_db: f64,
-}
-
-fn run_pactl(args: &[&str]) -> Result<String> {
-    let output = Command::new("pactl").args(args).output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "pactl {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-    Ok(String::from_utf8(output.stdout)?)
-}
-
-fn default_sink_name() -> Result<String> {
-    let raw = run_pactl(&["-f", "json", "info"])?;
-    let info: Value = serde_json::from_str(&raw)?;
-    info["default_sink_name"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "default_sink_name missing from `pactl info`".into())
-}
-
-fn list_sinks() -> Result<Vec<Value>> {
-    let raw = run_pactl(&["-f", "json", "list", "sinks"])?;
-    let sinks: Vec<Value> = serde_json::from_str(&raw)?;
-    Ok(sinks)
 }
 
 /// Headphone detection, tuned against real hardware rather than assumed from docs:
@@ -82,7 +52,7 @@ fn current_db(sink: &Value) -> Option<f64> {
 }
 
 fn set_volume_db(sink_name: &str, db: f64) -> Result<()> {
-    run_pactl(&["set-sink-volume", sink_name, &format!("{db:.2}dB")])?;
+    pactl::run(&["set-sink-volume", sink_name, &format!("{db:.2}dB")])?;
     Ok(())
 }
 
@@ -91,8 +61,8 @@ fn set_volume_db(sink_name: &str, db: f64) -> Result<()> {
 /// (not headphones, already under the cap, or a transient read/write error worth logging but
 /// not fatal to the poll loop).
 pub fn enforce_cap(headroom_db: f64) -> Result<Option<ClampEvent>> {
-    let default_name = default_sink_name()?;
-    let sinks = list_sinks()?;
+    let default_name = pactl::default_sink_name()?;
+    let sinks = pactl::list_sinks()?;
     let Some(sink) = sinks.iter().find(|s| s["name"] == default_name) else {
         return Ok(None);
     };
