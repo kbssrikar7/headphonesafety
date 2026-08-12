@@ -42,9 +42,19 @@ Each shipping platform is a self-contained subdirectory with its own build, inst
 instructions — start with that platform's README. The `docs/*-port.md` guides are from-scratch
 architecture research written before implementation, kept even after a platform ships (see
 [`docs/ubuntu-port.md`](docs/ubuntu-port.md), which is what `linux/` was actually built from) as
-the record of *why* each platform's design looks the way it does.
+the record of *why* each platform's design looks the way it does:
+
+- [Windows](docs/windows-port.md) — via a Windows Audio Processing Object, with real-world
+  precedent ([Equalizer APO](https://sourceforge.net/projects/equalizerapo/)) showing it's
+  achievable without a permission prompt at runtime.
+- [Ubuntu / Linux](docs/ubuntu-port.md) — the most favorable of the platforms researched, and the
+  one this repo's `linux/` was actually built from: PipeWire's built-in monitor sources need no
+  virtual driver and, for a native (non-Flatpak) app, no permission prompt at all.
+- [Android](docs/android-port.md) — the most restrictive of the four; Android is adding this
+  natively (Sound Dose / Hearing Wellness) with no public API to extend it, and the real-time
+  limiter path has real constraints (some apps opt out of capture entirely, a Developer Options
+  requirement on Android 15+, and open questions around Play Store distribution).
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-</content>

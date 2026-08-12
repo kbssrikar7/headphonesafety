@@ -170,4 +170,3 @@ Sources/HeadphoneSafety/
 ## License
 
 MIT — see [LICENSE](../LICENSE).
-</content>
