@@ -1,9 +1,12 @@
 # Headphone Safety (Linux)
 
-A Linux port of [Headphone Safety](https://github.com/kbssrikar7/headphonesafety), a menu-bar app
-that protects your hearing during headphone use by bringing iOS's "Reduce Loud Sounds" behavior to
-the desktop. See [`docs/ubuntu-port.md`](docs/ubuntu-port.md) for the full architecture research
-this build follows.
+The Linux implementation of Headphone Safety, a tray app that protects your hearing during
+headphone use by bringing iOS's "Reduce Loud Sounds" behavior to the desktop. See
+[`docs/ubuntu-port.md`](../docs/ubuntu-port.md) for the full architecture research this build
+follows.
+
+> See the [repo root](../README.md) for the other platforms (macOS is also implemented; Windows
+> and Android are architecture guides only, not yet built).
 
 ## Status
 
@@ -17,7 +20,7 @@ live-verified as one running application, not standalone prototypes:
 - **Real-Time Limiter**: `module-ladspa-sink` hosting Zam's `ZaMaximX2` true peak limiter
   (`src/limiter.rs`). Verified with logged peak dB, not by ear: a -1.1dB source tone came out at
   -10.1dB against a -10dB ceiling. `lsp-plugins-ladspa`'s `limiter_stereo` is the eventual primary
-  DSP (see `docs/ubuntu-port.md`) but has ~24 input control ports vs. Zam's clean 3 — swapping it
+  DSP (see `../docs/ubuntu-port.md`) but has ~24 input control ports vs. Zam's clean 3 — swapping it
   in is follow-up work.
 - **Device-removal watcher**: a native `pipewire` crate registry watcher on its own thread
   (`src/pw_client.rs`), reporting Audio/Sink removals event-driven, no polling. Wired into the
@@ -53,10 +56,10 @@ headphones connected). Its virtual sink shows up in system volume controls (e.g.
 Sound) as `Headphone_Safety_Limiter` while active, not the raw `hps_limiter` module name.
 
 Not yet implemented: `lsp-plugins` as the primary limiter DSP (see above), and a persisted
-settings file (toggle/headroom state resets on restart). See `docs/ubuntu-port.md` for the
+settings file (toggle/headroom state resets on restart). See `../docs/ubuntu-port.md` for the
 original architecture research and `src/routing.rs`/`src/limiter.rs` for what actually shipped.
 
-### Testing checklist (from `docs/ubuntu-port.md`)
+### Testing checklist (from `../docs/ubuntu-port.md`)
 
 - [x] Volume Cap clamps correctly on a headphone-classified sink, leaves speakers untouched.
 - [x] Real-Time Limiter is audible and does not silently do nothing.
