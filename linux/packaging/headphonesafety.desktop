@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Headphone Safety
+Comment=Protects your hearing during headphone use
+Exec=/usr/bin/headphonesafety
+Icon=audio-headphones
+Terminal=false
+Categories=AudioVideo;Audio;
+X-GNOME-Autostart-enabled=true
