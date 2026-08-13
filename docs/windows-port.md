@@ -109,23 +109,58 @@ completely clean running experience.
    - [Windows 11 APIs for Audio Processing Objects](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/windows-11-apis-for-audio-processing-objects) — check whether Windows 11 introduced a simpler/newer registration path than the classic INF-based one; this could meaningfully reduce the install complexity.
 2. Pull the official sample APO from Microsoft's [`Windows-driver-samples`](https://github.com/microsoft/Windows-driver-samples) GitHub repo (there are audio APO samples under the `audio/` directory, e.g. a swap/delay APO) — start from a working sample rather than the headers alone.
 3. An APO is implemented as an in-process COM object, packaged as a DLL, implementing
-   (at minimum) `IAudioProcessingObject` and `IAudioProcessingObjectConfiguration`. There are two
-   kinds: **LFX** (local effect, applied before mixing/per-stream) and **GFX** (global effect,
-   applied after mixing, on the final mixed signal). **Use GFX** — the limiter needs to see the
-   final mixed output, the same thing BlackHole captures on macOS, not any one app's individual
-   stream.
-4. Registering the APO against a real output device normally requires modifying that device's
-   driver INF (`AudioProcessingObjects` registry section under the device's driver key) to insert
-   your CLSID into the device's effects chain. Study exactly how Equalizer APO's installer does
-   this — it manipulates the registry directly under
-   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\<device-guid>\FxProperties`
-   rather than requiring a real driver package reinstall. This is the actual mechanism to
-   replicate.
-5. Get a trivial pass-through APO working and *verified audible* before writing any limiter DSP —
+   (at minimum) `IAudioProcessingObject` and `IAudioProcessingObjectConfiguration`. There are
+   three per-endpoint effect slots: **SFX** (per-stream, pre-mix), **MFX** (per-mode), and
+   **EFX** (post-mix, one instance per endpoint — historically also called "GFX" in older docs
+   and in an earlier draft of this section). **Use EFX** — the limiter needs to see the final
+   mixed output, the same thing BlackHole captures on macOS, not any one app's individual stream.
+4. **[Corrected during actual implementation — see `windows/apo/register/register-apo.ps1`, the
+   verified source of truth]** Registering the APO against a real output device does *not* require
+   modifying the device's driver INF. It's a direct registry write under
+   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\<device-guid>\FxProperties`,
+   confirmed against PotatoAPO's real, working installer (github.com/Dybios/PotatoAPO — a
+   minimal, non-ATL APO that attaches to real device endpoints, not a sample virtual driver).
+   An earlier draft of this doc assumed a single `REG_SZ` value named
+   `{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2` — that was wrong on two counts. The actual value
+   name for EFX is `{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7` (`,5` for SFX, `,6` for MFX), value
+   type `REG_MULTI_SZ`. A live `reg.exe query` against this test machine's actual Speakers
+   endpoint showed its pre-existing (Realtek/Conexant vendor) EFX value reported as type
+   `REG_SZ`, which looked like a contradiction — but **`REG_MULTI_SZ` is confirmed correct**:
+   `register-apo.ps1` wrote our CLSID as `REG_MULTI_SZ`, the audio engine loaded it after an
+   `audiosrv` restart with no errors in Event Viewer, and audio was confirmed still audible and
+   unmodified through the pass-through APO. (The vendor value's apparent `REG_SZ` type was
+   either a `reg.exe` display quirk for a single-element `REG_MULTI_SZ`, or Realtek's own value
+   genuinely differs in type from what third-party APOs are expected to write — either way, it
+   doesn't affect what this project writes.) `register-apo.ps1` backs up and restores any
+   pre-existing value at that slot (e.g. a vendor effects chain) rather than clobbering it, and
+   verifies every write by reading it back before reporting success.
+5. **[Found during actual implementation, not anticipated by any earlier draft of this doc]**
+   `HKLM\...\MMDevices\Audio` and everything under it (including every endpoint's `FxProperties`
+   key) is owned by `TrustedInstaller`, not `Administrators` — confirmed live on this test
+   machine (Windows 10 22H2, build 19045): a fully UAC-elevated Administrator process got
+   `Access is denied` writing a FxProperties value via both PowerShell's `Set-ItemProperty` *and*
+   raw `reg.exe`, despite the key's DACL nominally listing `BUILTIN\Administrators: SetValue`.
+   This is documented, expected Windows behavior, not a machine-specific quirk (corroborated by
+   `dechamps/APO`'s README and multiple Equalizer APO SourceForge support threads describing the
+   identical failure). **The fix, confirmed against Equalizer APO's own real installer source
+   (`RegistryHelper.cpp` in its GitHub mirror)**: before writing FxProperties, take ownership of
+   the specific endpoint's `FxProperties` key and rewrite its DACL to grant Administrators full
+   control — this is the standard `SeTakeOwnershipPrivilege` technique (the registry equivalent
+   of `takeown.exe` + `icacls` for the filesystem), not TrustedInstaller impersonation or any
+   more exotic escalation. Concretely: enable `SeTakeOwnershipPrivilege` on the process token via
+   `AdjustTokenPrivileges`, open the key with `WRITE_OWNER`, call `RegSetKeySecurity` with the
+   local Administrators group as owner, re-open with `WRITE_DAC`, grant Administrators
+   `KEY_ALL_ACCESS` via a new DACL, then the value write succeeds normally. This is a genuinely
+   bigger action than "admin rights, comparable to `sudo`" (the framing this doc originally used)
+   — it permanently reassigns ownership of a Windows-protected system registry key away from
+   TrustedInstaller, which is worth being explicit with the user about before doing it, even
+   though it's well-precedented, standard administrative practice and not a security bypass in
+   the TrustedInstaller-impersonation sense.
+6. Get a trivial pass-through APO working and *verified audible* before writing any limiter DSP —
    this mirrors exactly how the macOS build was debugged (get capture→output working silently, as
    a no-op pass-through, before adding the PeakLimiter stage; several of the hardest macOS bugs
    were in the pass-through plumbing, not the DSP).
-6. Implement the limiter DSP (see "Limiter DSP algorithm" below) inside the APO's `APOProcess`
+7. Implement the limiter DSP (see "Limiter DSP algorithm" below) inside the APO's `APOProcess`
    callback. **This callback runs on a real-time audio thread inside the audio engine process —
    it must never block, allocate, take a lock that could be contended, or touch paged memory.**
    Microsoft's docs are explicit about this (`nonblocking`, `nonpageable` requirements) — treat
@@ -272,6 +307,12 @@ Mirrors how the macOS version was actually built and debugged:
   distribution, note that DisableProtectedAudioDG plus an unsigned APO will show Windows
   SmartScreen's "unknown publisher" warning on install — document this for users the same way the
   macOS README documents the Gatekeeper right-click-to-open step.
+- The installer must also perform the take-ownership step described above (item 5 under "Feature
+  2") for the target endpoint's FxProperties key — confirmed necessary and working end-to-end
+  (verified: FxProperties write succeeded, `audiosrv` restarted cleanly, no Event Viewer errors,
+  audio confirmed still audible and unmodified through the pass-through APO). This should be
+  framed to users as part of the same one-time elevated install step as DisableProtectedAudioDG,
+  not a separate scarier-sounding action.
 - If using Approach B (virtual cable), document the separate driver install step clearly, the same
   way the macOS README documents installing BlackHole via Homebrew as a prerequisite.
 
@@ -297,8 +338,10 @@ Mirrors how the macOS version was actually built and debugged:
 - [Implementing Audio Processing Objects](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/implementing-audio-processing-objects)
 - [Audio Processing Object Architecture](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/audio-processing-object-architecture)
 - [Windows 11 APIs for Audio Processing Objects](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/windows-11-apis-for-audio-processing-objects)
-- [Microsoft's Windows-driver-samples (GitHub)](https://github.com/microsoft/Windows-driver-samples) — real sample APO source
-- [Equalizer APO (SourceForge)](https://sourceforge.net/projects/equalizerapo/) — the real-world precedent proving this is achievable solo; study both its installer behavior and, if available, its source
+- [Microsoft's Windows-driver-samples (GitHub)](https://github.com/microsoft/Windows-driver-samples) — real sample APO source (SwapAPO/DelayAPO: useful for `APOProcess`/`IAudioProcessingObjectConfiguration` boilerplate shape; not useful for real-device registration, since these samples target SysVAD's own sample virtual driver)
+- [Equalizer APO (SourceForge)](https://sourceforge.net/projects/equalizerapo/) — the real-world precedent proving this is achievable solo; its [GitHub mirror](https://github.com/mirror/equalizerapo) (`DeviceAPOInfo.cpp`, `helpers/RegistryHelper.cpp`) is the actual source used to work out the FxProperties take-ownership mechanism above
+- [PotatoAPO](https://github.com/Dybios/PotatoAPO) — a minimal, non-ATL, real-device-attaching APO; the actual reference used for `windows/apo/`'s COM object shape and the FxProperties value name/type scheme
+- [dechamps/APO README](https://github.com/dechamps/APO/blob/master/README.md) — technical explanation that MMDevices\Audio and its subkeys are TrustedInstaller-owned by default
 - [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) — fallback-approach virtual device
 - `IPolicyConfig` reference implementation: search GitHub for `tartakynov/audioswitch`
 
