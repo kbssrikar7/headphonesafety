@@ -23,8 +23,17 @@ const LABEL: &str = "ZaMaximX2";
 const DEFAULT_RELEASE: f64 = 3.16228;
 // Underscores, not spaces: `sink_properties=device.description="X Y"` gets silently truncated
 // at the first space by pactl's module-argument parser even when quoted (confirmed live, both
-// single- and double-quoted) — passed as a single argv element with no shell involved to do the
-// quoting pactl seems to expect, so the value has to be space-free instead of fighting that.
+// single- and double-quoted, and backslash-escaped) — passed as a single argv element with no
+// shell involved to do the quoting pactl seems to expect, so the value has to be space-free
+// instead of fighting that.
+//
+// Also confirmed live: `module-ladspa-sink`'s `sink_properties=` only honors its *first*
+// key=value pair — a second key after it (tried `device.icon_name=audio-headphones` both before
+// and after `device.description=...` in the same value, and as a second separate
+// `sink_properties=` argument) is silently dropped either way, unlike `module-null-sink`, whose
+// `sink_properties=` correctly parses a space-separated multi-key list. So this module can carry
+// a friendly name *or* a custom icon via this mechanism, not both — description was kept since a
+// raw `hps_limiter`-style name was the more confusing of the two problems.
 const FRIENDLY_DESCRIPTION: &str = "Headphone_Safety_Limiter";
 
 /// Loads the limiter over `master_sink`, capping output peaks at `headroom_db` below max.

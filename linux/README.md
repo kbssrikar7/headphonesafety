@@ -55,6 +55,18 @@ silently kept protecting the old device; fixed after catching it live with real 
 headphones connected). Its virtual sink shows up in system volume controls (e.g. GNOME Settings →
 Sound) as `Headphone_Safety_Limiter` while active, not the raw `hps_limiter` module name.
 
+**This is expected, not a bug**: enabling the Real-Time Limiter necessarily adds a new,
+selectable entry to your system's output-device list for as long as it's on (it disappears again
+the moment you disable it). This isn't something the app can avoid — GNOME's output picker and
+PipeWire's own default-device policy both key off nothing more specific than "is this an
+`Audio/Sink` node," and the limiter has to be one of those for the OS to route your system's
+audio through it at all. Every comparable tool works this way, on every platform: this project's
+own macOS build has the identical characteristic with [BlackHole](../macos/README.md#real-time-limiter),
+and the same is true of Soundflower, VB-Cable on Windows, and PipeWire's own EasyEffects. It's the
+mechanism, not a side effect of one. `module-ladspa-sink`'s property-passing is also limited to a
+single `sink_properties` key (see the comment in `src/limiter.rs`), which is why the entry has a
+friendly name but a generic icon rather than both.
+
 Not yet implemented: `lsp-plugins` as the primary limiter DSP (see above), and a persisted
 settings file (toggle/headroom state resets on restart). See `../docs/ubuntu-port.md` for the
 original architecture research and `src/routing.rs`/`src/limiter.rs` for what actually shipped.
