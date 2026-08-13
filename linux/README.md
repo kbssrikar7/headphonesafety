@@ -103,6 +103,41 @@ original architecture research and `src/routing.rs`/`src/limiter.rs` for what ac
 | Tray icon | [`ksni`](https://crates.io/crates/ksni) (pure-Rust StatusNotifierItem) |
 | Packaging | `cargo-deb` → `.deb` |
 
+## Requirements (Ubuntu, or any Linux)
+
+**Developed and tested only on Ubuntu 24.04 LTS (GNOME, X11)** — this is the honest scope of what's
+actually been verified, not a guess at broader compatibility. Whether it works elsewhere depends
+on which piece:
+
+- **The `.deb` package** only installs directly on Debian/Ubuntu-family distros (Debian, Ubuntu,
+  Pop!_OS, Linux Mint, elementary OS, Zorin, ...) — `dpkg`/`apt` aren't how Fedora, openSUSE, Arch,
+  or similar install packages. On those, use "Option 2: Build from source" below (the `apt-get
+  install` line is the one Ubuntu-specific step there; substitute your distro's package manager
+  and the equivalent package names for `libpipewire-0.3-dev`, `pkg-config`, `libclang-dev`, `clang`).
+- **The runtime architecture** (PipeWire + `pipewire-pulse` + WirePlumber) is *not* Ubuntu-specific
+  — it's the default audio stack on most current mainstream distros (Fedora, current Debian, Arch,
+  Pop!_OS, openSUSE Tumbleweed, and Ubuntu since 22.10). It is **not** what you get on a
+  classic-PulseAudio-only system (older LTS releases, some minimal/server installs) — this has
+  never been tested against real PulseAudio (without PipeWire underneath), and some of what's
+  documented above (the `module-virtual-sink` naming quirk, the `sink_properties` single-key
+  limit) was confirmed specifically against PipeWire's `pipewire-pulse` compatibility layer, which
+  may not match genuine PulseAudio's behavior.
+- **The tray icon** needs something implementing the StatusNotifierItem D-Bus spec to actually
+  render it. KDE Plasma and XFCE (with the indicator plugin) support this natively. Ubuntu's GNOME
+  ships the `ubuntu-appindicators` extension active by default, which is why this works out of the
+  box here — a non-Ubuntu vanilla GNOME session (e.g. stock Fedora Workstation) does **not** ship
+  that extension, so the app still runs correctly, but the tray icon won't be visible until you
+  install an AppIndicator/KStatusNotifierItem GNOME Shell extension yourself.
+- **Headphone detection** (`src/volume_cap.rs`'s `is_headphone_sink`) reads standard
+  PipeWire/PulseAudio device properties, not anything Ubuntu-specific, but was only ever exercised
+  against this one laptop's hardware (a Dell Inspiron 3501, Realtek codec) plus one real Bluetooth
+  headset — other hardware's property shapes (see the "Headphone detection" section below) haven't
+  been cross-checked.
+
+In short: architecturally portable to any modern PipeWire-based Linux desktop, but "portable in
+principle" and "verified" are different claims — only the second is true for Ubuntu 24.04 GNOME
+today.
+
 ## Installation
 
 ### Option 1: Download a release (recommended)
