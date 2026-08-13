@@ -91,6 +91,64 @@ original architecture research and `src/routing.rs`/`src/limiter.rs` for what ac
 | Tray icon | [`ksni`](https://crates.io/crates/ksni) (pure-Rust StatusNotifierItem) |
 | Packaging | `cargo-deb` → `.deb` |
 
+## Installation
+
+### Option 1: Download a release (recommended)
+
+1. Download the latest `.deb` from [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tagged `linux-v*`).
+2. Install it:
+   ```
+   sudo dpkg -i headphonesafety-linux_v*_amd64.deb
+   ```
+   `Depends` (`pipewire-pulse`, `wireplumber`, `pulseaudio-utils`, `zam-plugins`, and
+   `libpipewire-0.3-0`) are pulled in automatically.
+3. Launch `headphonesafety` from your application launcher, or run `headphonesafety` in a
+   terminal. Look for the headphones icon in your system tray (GNOME needs the
+   `ubuntu-appindicators` extension, or equivalent, active to render `StatusNotifierItem` tray
+   icons; this ships active by default on Ubuntu).
+
+### Option 2: Build from source
+
+```
+sudo apt-get install -y libpipewire-0.3-dev pkg-config libclang-dev clang
+git clone https://github.com/kbssrikar7/headphonesafety.git
+cd headphonesafety/linux
+cargo install cargo-deb   # one-time
+cargo build --release
+cargo deb --no-build
+sudo dpkg -i target/debian/headphonesafety-linux_*.deb
+```
+
+(`libclang-dev`/`clang` are for the `pipewire` crate's `bindgen` step specifically — without them
+the build fails with a `stdbool.h` not found error from inside `libspa-sys`'s build script, not an
+obviously pipewire-related message. `cargo deb`'s `Depends` covers everything needed at runtime —
+see `[package.metadata.deb]` in `Cargo.toml` — so a machine with just the `.deb` installed doesn't
+need any of the build-time packages above.)
+
+The package installs `/usr/share/applications/headphonesafety.desktop`, so it shows up as a
+regular launchable app (e.g. in GNOME's Activities search) — but installing the `.deb` does
+**not** make it start automatically at login by itself; that's opt-in:
+
+```
+mkdir -p ~/.config/autostart
+cp /usr/share/applications/headphonesafety.desktop ~/.config/autostart/
+```
+
+To undo: `rm ~/.config/autostart/headphonesafety.desktop`
+
+### Running from source without packaging
+
+```
+cargo build
+HPS_HEADROOM_DB=10 ./target/debug/headphonesafety
+```
+
+`HPS_HEADROOM_DB` sets the *initial* cap in dB below max (macOS presets: 0, 5, 10, 15, 20); change
+it afterward from the tray menu.
+
+Manual verification subcommands for individual pieces (each prints what it's doing and cleans up
+after itself): `test-routing`, `test-limiter`, `test-watcher`.
+
 ## Headphone detection
 
 Two signals, combined because real hardware doesn't expose them consistently:
@@ -110,66 +168,6 @@ PipeWire version — it wraps `libpipewire-module-loopback`, and the resulting s
 naming convention changes in a future PipeWire release. (`module-ladspa-sink`, used by the
 limiter, does **not** apply this prefix — the sink is named exactly `sink_name`. The
 `pulse.module.id` lookup handles both without needing to know which.)
-
-## Building
-
-Besides a Rust toolchain, the `pipewire` crate needs headers/libs and a working `bindgen` at
-build time:
-
-```
-sudo apt-get install -y libpipewire-0.3-dev pkg-config libclang-dev clang
-```
-
-(`libclang-dev`/`clang` are for `bindgen` specifically — without them the build fails with a
-`stdbool.h` not found error from inside `libspa-sys`'s build script, not an obviously
-pipewire-related message.)
-
-## Running from source
-
-```
-cargo build
-HPS_HEADROOM_DB=10 ./target/debug/headphonesafety
-```
-
-`HPS_HEADROOM_DB` sets the *initial* cap in dB below max (macOS presets: 0, 5, 10, 15, 20);
-change it afterward from the tray menu. Runs as a tray-only app — no terminal UI beyond startup
-logging — so look for the headphones icon (GNOME needs the `ubuntu-appindicators` extension, or
-equivalent, active to render `StatusNotifierItem` tray icons; this ships active by default on
-Ubuntu).
-
-Manual verification subcommands for individual pieces (each prints what it's doing and cleans up
-after itself): `test-routing`, `test-limiter`, `test-watcher`.
-
-## Packaging
-
-```
-cargo install cargo-deb   # one-time
-cargo build --release
-cargo deb --no-build
-sudo dpkg -i target/debian/headphonesafety-linux_*.deb
-```
-
-`cargo deb`'s `Depends` covers everything needed at runtime (see `[package.metadata.deb]` in
-`Cargo.toml`) — a machine with just the `.deb` installed doesn't need the build-time
-`libclang-dev`/`clang`/`libpipewire-0.3-dev` packages above, those are compile-time only.
-
-The package also installs `/usr/share/applications/headphonesafety.desktop`, so it shows up as a
-regular launchable app (e.g. in GNOME's Activities search) — but installing the `.deb` does
-**not** make it start automatically at login by itself; that's opt-in (see below), matching how
-the macOS build treats "Launch at login" as a documented optional step rather than automatic.
-
-### Launch at login (optional)
-
-```
-mkdir -p ~/.config/autostart
-cp /usr/share/applications/headphonesafety.desktop ~/.config/autostart/
-```
-
-To undo:
-
-```
-rm ~/.config/autostart/headphonesafety.desktop
-```
 
 ## License
 

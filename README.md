@@ -33,8 +33,8 @@ whatever mechanism is idiomatic there:
 
 | Platform | Status | |
 |---|---|---|
-| macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) |
-| Linux | Shipping | [`linux/`](linux/) — [README](linux/README.md) |
+| macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `v*`) |
+| Linux | Shipping | [`linux/`](linux/) — [README](linux/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `linux-v*`) |
 | Windows | Architecture guide only, not yet built | [`docs/windows-port.md`](docs/windows-port.md) |
 | Android | Architecture guide only, not yet built | [`docs/android-port.md`](docs/android-port.md) |
 
