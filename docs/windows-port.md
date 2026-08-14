@@ -375,17 +375,45 @@ actual loading, and where it stands.
    machine/Windows build), but the working hypothesis should now weight toward "something about
    this Windows 10 22H2 build's audio engine" rather than "this one vendor's driver."
 
+10. **Environmental causes checked and ruled out** (all read-only or easily-reversed checks, no
+    evidence found for any of them): Code Integrity event log
+    (`Microsoft-Windows-CodeIntegrity/Operational`) — real 3033 "signing level" violations exist
+    on this machine for other unrelated apps (Chrome, VS Build Tools' telemetry DLL), proving the
+    subsystem is active and logging, but **zero entries ever mention `audiodg.exe` or this
+    project's DLL/CLSID**, across the full log history — if Code Integrity were silently blocking
+    our APO, this is exactly where it would show up. Domain/Group Policy (`gpresult /r`) — this
+    machine is not domain-joined and has no applied GPOs, ruling out an enterprise-managed
+    restriction. Third-party antivirus/EDR — none installed, only stock Windows Defender.
+    Device Guard/HVCI — not active (`Win32_DeviceGuard` reports no running security services).
+    OS edition — standard Windows 10 Pro (SKU 48), not a stripped N/LTSC edition. Patch level —
+    fully current (build 19045.6466), not a stale/unpatched install with a known-broken audio
+    engine.
+11. **`AudioEndpointBuilder` service restart** (a genuinely different hypothesis from anything
+    above: this service, distinct from `audiosrv`/`audiodg.exe`, is specifically responsible for
+    managing audio endpoint devices and their properties — the theory being it might cache "what
+    effects are available for device X" independently and never re-read FxProperties without its
+    own restart). Re-registered against the actual live-default device (confirmed via `--test-cap`
+    immediately beforehand, after an earlier mistaken test accidentally exercised the wrong
+    endpoint), restarted `AudioEndpointBuilder` (which cascades to restarting `Audiosrv` and
+    terminating `audiodg.exe` too — confirmed all three observed), then re-ran the same isolated
+    loopback-measurement methodology as the Bluetooth test above. Result: identical to every other
+    attempt — same measured peak with the limiter on vs. off, `apoProcessCallCount` still 0. Ruled
+    out.
+
 **Where this stands**: this is being treated as a genuine, unresolved platform quirk, not a bug
 in this project's code — confirmed across two structurally unrelated driver stacks on the same
-machine. Per Microsoft's own documentation, some drivers architecturally cannot host an inserted
-endpoint APO because their mode mixing happens lower in the kernel-mode stack than where APO
-insertion is possible, but that explanation is weaker now that it reproduces on Bluetooth audio
-too (a Microsoft-owned stack, not a third-party vendor driver). **If you're testing on different
-hardware (a different physical machine, or a newer Windows 11 build), try the existing
-registration as-is first** — don't assume it's broken; it may be specific to this Windows 10
-22H2 build rather than to any particular driver. Diagnosing further would require kernel-level
-debugging (WinDbg attached to `audiodg.exe`) or testing on a genuinely different
-machine/Windows version, both out of scope for a normal dev session. If Approach A proves
+machine, and with every accessible environmental/policy-level explanation checked and ruled out.
+Per Microsoft's own documentation, some drivers architecturally cannot host an inserted endpoint
+APO because their mode mixing happens lower in the kernel-mode stack than where APO insertion is
+possible, but that explanation is weaker now that it reproduces on Bluetooth audio too (a
+Microsoft-owned stack, not a third-party vendor driver) — and no security/policy software is
+implicated either. **If you're testing on different hardware (a different physical machine, or a
+newer Windows 11 build), try the existing registration as-is first** — don't assume it's broken;
+it may be specific to this Windows 10 22H2 build rather than to any particular driver. The
+remaining diagnostic avenues are kernel-level debugging (WinDbg attached to `audiodg.exe` — a
+much bigger, genuinely risky undertaking, since a debugger attached to the live system audio
+process can crash system-wide audio if something goes wrong) or testing on a genuinely different
+machine/Windows version — both out of scope for a normal dev session. If Approach A proves
 unworkable on other machines too, not just this one, fall back to Approach B (documented above)
 — all the DSP/limiter code (`windows/apo/Limiter.h/.cpp`) is pure math with no Win32/COM
 dependencies and is directly reusable in a WASAPI-loopback-based implementation.
