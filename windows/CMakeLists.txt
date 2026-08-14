@@ -14,3 +14,4 @@ target_include_directories(hps_shared INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/shar
 
 add_subdirectory(apo)
 add_subdirectory(tray)
+add_subdirectory(tools)

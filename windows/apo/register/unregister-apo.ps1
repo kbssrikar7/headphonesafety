@@ -1,10 +1,10 @@
 # unregister-apo.ps1
 #
-# Reverses register-apo.ps1: removes our CLSID from the given endpoint's EFX FxProperties slot
-# (restoring any pre-existing value that was backed up during registration), then unregisters
-# the COM class. Deliberately leaves DisableProtectedAudioDG alone - a future re-install or some
-# other unsigned APO may still depend on it, and there is no reliable way to know from here
-# whether it is safe to revert.
+# Reverses register-apo.ps1: removes our CLSID from the given endpoint's SFX+MFX FxProperties
+# slots (restoring any pre-existing values that were backed up during registration), then
+# unregisters the COM class. Deliberately leaves DisableProtectedAudioDG alone - a future
+# re-install or some other unsigned APO may still depend on it, and there is no reliable way to
+# know from here whether it is safe to revert.
 #
 # Must run elevated (writes under HKEY_LOCAL_MACHINE).
 [CmdletBinding()]
@@ -17,7 +17,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ApoClsid = "{AAF92DEA-FFE0-4E91-94A4-39385AD5ECFD}"
-$EfxValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"
+$FxValueNames = @(
+    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5",  # SFX CLSID
+    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6",  # MFX CLSID
+    "{d3993a3f-99c2-4402-b5ec-a92a0367664b},5",  # SFX supported processing modes
+    "{d3993a3f-99c2-4402-b5ec-a92a0367664b},6"   # MFX supported processing modes
+)
 $BackupRoot = "HKCU:\Software\HeadphoneSafety\FxPropertiesBackup"
 
 function Test-IsElevated {
@@ -35,15 +40,17 @@ $fxPropsPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\
 $backupPath = Join-Path $BackupRoot $EndpointGuid
 
 if (Test-Path $fxPropsPath) {
-    Remove-ItemProperty -Path $fxPropsPath -Name $EfxValueName -ErrorAction SilentlyContinue
-    Write-Host "Removed the EFX value from endpoint {$EndpointGuid}."
+    foreach ($valueName in $FxValueNames) {
+        Remove-ItemProperty -Path $fxPropsPath -Name $valueName -ErrorAction SilentlyContinue
+        Write-Host "Removed '$valueName' from endpoint {$EndpointGuid}."
 
-    if (Test-Path $backupPath) {
-        $backup = Get-ItemProperty -Path $backupPath -Name $EfxValueName -ErrorAction SilentlyContinue
-        if ($null -ne $backup) {
-            Set-ItemProperty -Path $fxPropsPath -Name $EfxValueName -Value $backup.$EfxValueName -Type MultiString
-            Write-Host "Restored the endpoint's previous EFX value: $($backup.$EfxValueName)"
-            Remove-Item -Path $backupPath -Force
+        if (Test-Path $backupPath) {
+            $backup = Get-ItemProperty -Path $backupPath -Name $valueName -ErrorAction SilentlyContinue
+            if ($null -ne $backup) {
+                Set-ItemProperty -Path $fxPropsPath -Name $valueName -Value $backup.$valueName -Type MultiString
+                Write-Host "  Restored previous value: $($backup.$valueName)"
+                Remove-ItemProperty -Path $backupPath -Name $valueName -ErrorAction SilentlyContinue
+            }
         }
     }
 } else {

@@ -24,6 +24,16 @@ rollback.** Every one of those lessons cost real debugging time on macOS and the
 failure modes (timing windows, misleading success signals, blocking calls on a hot path) are
 generic enough that they are very likely to recur on Windows in some form.
 
+**Status as of the Phase 3 implementation session**: Volume Cap is fully built, tested, and
+working live. The APO (Real-Time Limiter) is fully built and *correctly registered* (confirmed
+against real reference implementations, confirmed via COM instantiation, confirmed via registry
+readback surviving a reboot) but **`audiodg.exe` never actually loads it on the test machine's
+Conexant ISST driver**, for reasons not resolvable without kernel-level debugging — see "Known
+blocker: APO never loads on Conexant ISST" below before spending more time on registration
+mechanics; that part is already correct. If you're picking this up on different hardware, the
+APO code and registration scripts should be tried as-is first — this may well be driver-specific,
+not a fundamental Windows limitation.
+
 ---
 
 ## Architecture overview
@@ -298,6 +308,72 @@ Mirrors how the macOS version was actually built and debugged:
 5. **UI**: a system tray icon (Windows Forms `NotifyIcon`, WPF equivalent, or a lighter framework)
    with a menu mirroring the macOS app's structure — device status, cap toggle + headroom presets,
    limiter toggle + status line.
+
+---
+
+## Known blocker: APO never loads on Conexant ISST (unresolved, read before re-registering)
+
+Found during live testing on a real machine (Windows 10 Pro 22H2, build 19045, "Speakers
+(Conexant ISST Audio)" via an Intel HD Audio bus). The registration mechanism itself is
+confirmed correct — this section explains what was verified working, what was tried to fix the
+actual loading, and where it stands.
+
+**What's confirmed correct**, so don't re-derive these from scratch:
+- `HeadphoneSafetyApo.dll` builds clean, exports the four required COM entry points
+  (`DllRegisterServer`/`DllUnregisterServer`/`DllGetClassObject`/`DllCanUnloadNow`), and its
+  CLSID (`{AAF92DEA-FFE0-4E91-94A4-39385AD5ECFD}`) instantiates successfully via plain COM
+  (`[System.Type]::GetTypeFromCLSID(...)` + `[System.Activator]::CreateInstance(...)` from
+  PowerShell, entirely outside the audio engine) — the DLL itself is not broken.
+- `register-apo.ps1` writes four FxProperties values, all verified by registry readback and
+  confirmed to survive a full reboot: `{d04e05a6-...},5` (SFX CLSID), `{d04e05a6-...},6` (MFX
+  CLSID), `{d3993a3f-...},5` and `{d3993a3f-...},6` (both `AUDIO_SIGNALPROCESSINGMODE_DEFAULT` =
+  `{c18e2f7e-933d-4965-b7d1-1eef228d2af3}`, required per Microsoft's "Implementing Audio
+  Processing Objects" doc — registering a CLSID alone only makes it *discoverable*, not usable
+  for live streaming, without also being listed as supporting a processing mode).
+- The `SeTakeOwnershipPrivilege` fix for the FxProperties key's TrustedInstaller ownership (see
+  "Feature 2" above) is real and necessary, and works correctly.
+
+**What was tried to make `audiodg.exe` actually load it, in order, none of which worked**:
+1. `Restart-Service audiosrv -Force` — does **not** restart `audiodg.exe` itself; confirmed same
+   PID before and after. A real gap in earlier assumptions ("audiosrv restart" and "audiodg.exe
+   restart" are not the same thing).
+2. `Stop-Process -Name audiodg -Force` — confirmed a genuinely fresh PID spawns on next playback;
+   still no load.
+3. A full system reboot — registration survives intact; still no load.
+4. Checking `PKEY_AudioEndpoint_Disable_SysFx` (`{1da5d803-...},5`, a per-endpoint "disable all
+   enhancements" master switch) — not set, ruled out.
+5. Live ETW tracing of the `Microsoft-Windows-Audio` provider
+   (`logman create trace X -p "Microsoft-Windows-Audio" 0xffffffffffffffff 0xff -o trace.etl -ets`,
+   then `tracerpt trace.etl -o trace.xml -of XML`), done twice (before and after fix #6 below) —
+   in both traces, `System_Effect_APO_Initialized` events show ONLY the OS's own built-in
+   `AdaptiveSpatialAudioRenderer` (CLSID `{5bbc2c71-dec2-4ba3-961a-36f37d1cc8a5}`,
+   `audioeng.dll`) ever getting initialized. Our CLSID never appears anywhere in either trace —
+   not even as a failed discovery attempt.
+6. Correcting the registration from EFX-only (`,7`) to the SFX+MFX+processing-mode scheme
+   described above, per Microsoft's own doc's note that some drivers do mode-mixing lower in the
+   kernel stack "where it is not possible to insert an endpoint APO" for EFX specifically — no
+   change in behavior.
+7. Checking for an active Spatial Sound format (Windows Sonic/Dolby Atmos/DTS) that might route
+   audio through a separate pipeline bypassing the classic chain — no HKCU customization found
+   for this endpoint, suggesting spatial sound is in its default (off) state; likely not the
+   cause, though not provably ruled out without a definitive live API check.
+8. PnP device disable/re-enable (`Disable-PnpDevice`/`Enable-PnpDevice` on the underlying
+   `INTELAUDIO\FUNC_01&VEN_14F1&...` device, not just the logical AudioEndpoint) — forces a full
+   driver re-enumeration, different from a reboot or process kill. Device came back healthy
+   (`Status: OK`); still no load.
+
+**Where this stands**: this is being treated as a genuine, unresolved, driver/machine-specific
+platform quirk, not a bug in this project's code. Per Microsoft's own documentation, some drivers
+architecturally cannot host an inserted endpoint APO because their mode mixing happens lower in
+the kernel-mode stack than where APO insertion is possible — this may simply be the case for this
+Conexant ISST driver on this Windows build. **If you're testing on different hardware (a
+different driver, e.g. Realtek's own non-Conexant stack, or Bluetooth headphones which use a
+completely different driver path), try the existing registration as-is first** — don't assume
+it's broken; it may just be this one driver. Diagnosing further would require kernel-level
+debugging (WinDbg attached to `audiodg.exe`), out of scope for a normal dev session. If Approach
+A proves unworkable across multiple driver stacks, not just this one, fall back to Approach B
+(documented above) — all the DSP/limiter code (`windows/apo/Limiter.h/.cpp`) is pure math with no
+Win32/COM dependencies and is directly reusable in a WASAPI-loopback-based implementation.
 
 ---
 

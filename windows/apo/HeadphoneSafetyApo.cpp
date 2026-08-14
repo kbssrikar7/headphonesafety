@@ -55,11 +55,19 @@ HRESULT __stdcall HeadphoneSafetyApo::Initialize(UINT32 cbDataSize, BYTE* pbyDat
 HRESULT __stdcall HeadphoneSafetyApo::LockForProcess(
     UINT32 u32NumInputConnections, APO_CONNECTION_DESCRIPTOR** ppInputConnections,
     UINT32 u32NumOutputConnections, APO_CONNECTION_DESCRIPTOR** ppOutputConnections) {
-    // Phase 3 opens the shared-memory IPC mapping here (a non-real-time context the audio engine
-    // calls before streaming starts) and caches the pointer for APOProcess to read. Phase 2 has
-    // nothing extra to set up.
-    return CBaseAudioProcessingObject::LockForProcess(
+    HRESULT hr = CBaseAudioProcessingObject::LockForProcess(
         u32NumInputConnections, ppInputConnections, u32NumOutputConnections, ppOutputConnections);
+    if (FAILED(hr)) return hr;
+
+    // Both non-real-time setup, safe here (called by the audio engine before streaming starts):
+    // open the IPC mapping the tray creates (a no-op if it's not open yet or never opens - see
+    // SharedStateClient's header comment), and reset the limiter's envelope state for this
+    // stream's actual format. GetSamplesPerFrame/GetFramesPerSecond are only valid once locked,
+    // which is why this happens after the base-class LockForProcess call above, not before it.
+    sharedState_.TryOpen();
+    limiter_.Reset(static_cast<double>(GetFramesPerSecond()), GetSamplesPerFrame());
+
+    return hr;
 }
 
 HRESULT __stdcall HeadphoneSafetyApo::NonDelegatingQueryInterface(const IID& iid, void** ppv) {

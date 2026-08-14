@@ -1,8 +1,9 @@
 // HeadphoneSafetyApo: the Real-Time Limiter's Windows Audio Processing Object.
 //
-// Phase 2 (this file): a pure pass-through - APOProcess just copies input to output unmodified.
-// Phase 3 adds the envelope-follower limiter DSP and shared-memory IPC wiring inside
-// ApoProcess.cpp without touching this header.
+// Phase 3: LockForProcess opens the shared-memory IPC mapping (SharedStateClient) and resets the
+// Limiter for the stream's actual sample rate/channel count - both non-real-time setup.
+// APOProcess (ApoProcess.cpp) reads sharedState_ and drives limiter_ on the real-time thread;
+// see that file's header comment for the constraints that govern everything it does.
 //
 // Built directly on the SDK's CBaseAudioProcessingObject (<BaseAudioProcessingObject.h>,
 // confirmed present in the plain Windows 11 SDK, not WDK-exclusive) rather than ATL - this
@@ -17,6 +18,9 @@
 #include <Unknwn.h>
 #include <audioenginebaseapo.h>
 #include <BaseAudioProcessingObject.h>
+
+#include "Limiter.h"
+#include "SharedStateClient.h"
 
 // COM aggregation support (a client can create this APO as part of a larger aggregate object).
 // The audio engine does not normally aggregate APOs, but every real-world reference APO
@@ -71,4 +75,9 @@ public:
 private:
     long refCount_;
     IUnknown* pUnkOuter_;
+
+    // Opened (non-real-time) in LockForProcess; read (real-time-safe plain loads only) in
+    // APOProcess. limiter_'s Reset() is also only ever called from LockForProcess.
+    hps::SharedStateClient sharedState_;
+    hps::Limiter limiter_;
 };

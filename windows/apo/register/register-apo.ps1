@@ -1,17 +1,34 @@
 # register-apo.ps1
 #
 # Registers the HeadphoneSafetyApo COM DLL as a system-wide APO class (regsvr32) and attaches it
-# to one render endpoint's EFX (Endpoint Effect) FxProperties slot - the post-mix, closest-to-
-# hardware processing location. That matches this project's requirement that the limiter see the
-# final mixed signal, the same thing BlackHole captures on macOS and PipeWire's monitor source
-# captures on Linux.
+# to one render endpoint's SFX+MFX FxProperties slots (stream effect, pre-mix per-stream; mode
+# effect, per-mode) - NOT EFX (endpoint effect, post-mix). That matches this project's requirement
+# that the limiter see the audio signal on its way to hardware, the same role BlackHole captures
+# on macOS and PipeWire's monitor source captures on Linux.
 #
-# NOTE ON THE FXPROPERTIES SCHEME: docs/windows-port.md assumed a single "GFX" value name,
-# {d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2. Phase 2 research against a real, working third-party
-# APO installer (PotatoAPO, github.com/Dybios/PotatoAPO) showed this was wrong - the actual
-# scheme is SFX=,5 (per-stream, pre-mix), MFX=,6 (per-mode), EFX=,7 (post-mix, one instance per
-# endpoint). This script uses EFX. The value TYPE is also REG_MULTI_SZ (a list of CLSIDs), not
-# REG_SZ as the doc assumed.
+# NOTE ON THE FXPROPERTIES SCHEME - two real fixes found the hard way while getting this to
+# actually load into audiodg.exe on a real machine (Conexant/Realtek ISST driver), not assumed:
+#
+# 1. Value name/type: docs/windows-port.md originally assumed a single "GFX" value name,
+#    {d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2. Phase 2 research against a real, working
+#    third-party APO installer (PotatoAPO, github.com/Dybios/PotatoAPO) corrected this to
+#    SFX=,5 (per-stream, pre-mix), MFX=,6 (per-mode), EFX=,7 (post-mix, one instance per
+#    endpoint), value type REG_MULTI_SZ (a list of CLSIDs), not REG_SZ.
+#
+# 2. EFX alone silently does nothing on some drivers, and a CLSID registration alone is not
+#    enough - confirmed via live ETW tracing of the Microsoft-Windows-Audio provider showing our
+#    APO's CLSID never appearing in a System_Effect_APO_Initialized event, despite the EFX value
+#    being correctly written and persisting through a full reboot. Per Microsoft's own
+#    "Implementing Audio Processing Objects" doc: some drivers do audio mode mixing lower in the
+#    kernel-mode stack, where "it is not possible to insert an endpoint APO" - EFX registration
+#    is accepted for discovery but never actually used for streaming on those drivers. And
+#    registering just the CLSID value (PKEY_FX_StreamEffectClsid/ModeEffectClsid) only makes an
+#    APO discoverable - to be used in live streaming it must ALSO be listed as a supported
+#    processing mode via PKEY_SFX/MFX_ProcessingModes_Supported_For_Streaming
+#    ({d3993a3f-99c2-4402-b5ec-a92a0367664b},5 for SFX / ,6 for MFX), a REG_MULTI_SZ of
+#    AUDIO_SIGNALPROCESSINGMODE_* GUIDs - AUDIO_SIGNALPROCESSINGMODE_DEFAULT is
+#    {c18e2f7e-933d-4965-b7d1-1eef228d2af3}. This script now registers SFX+MFX together with
+#    both the CLSID and the supported-processing-modes pairing, dropping EFX.
 #
 # Must run elevated (writes under HKEY_LOCAL_MACHINE). Run with -ListDevices first to find the
 # endpoint GUID to target.
@@ -25,7 +42,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ApoClsid = "{AAF92DEA-FFE0-4E91-94A4-39385AD5ECFD}"
-$EfxValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7"
+$DefaultModeGuid = "{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}"  # AUDIO_SIGNALPROCESSINGMODE_DEFAULT
+$SfxClsidValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5"
+$MfxClsidValueName = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6"
+$SfxModesValueName = "{d3993a3f-99c2-4402-b5ec-a92a0367664b},5"
+$MfxModesValueName = "{d3993a3f-99c2-4402-b5ec-a92a0367664b},6"
 $BackupRoot = "HKCU:\Software\HeadphoneSafety\FxPropertiesBackup"
 
 function Test-IsElevated {
@@ -207,46 +228,57 @@ if (-not (Test-Path $clsidKey)) {
 }
 Write-Host "  Verified: $clsidKey exists"
 
-Write-Host "[3/3] Attaching to endpoint {$EndpointGuid}'s EFX FxProperties slot..."
+Write-Host "[3/3] Attaching to endpoint {$EndpointGuid}'s SFX+MFX FxProperties slots..."
 $fxPropsPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{$EndpointGuid}\FxProperties"
 if (-not (Test-Path $fxPropsPath)) {
     throw "FxProperties key not found at $fxPropsPath - is {$EndpointGuid} a valid RENDER (output) endpoint GUID? Run with -ListDevices to check."
 }
 
-# Back up any existing EFX value for this endpoint before overwriting, so unregister-apo.ps1 can
-# restore it - an endpoint may already have a vendor EFX (e.g. a Realtek effects chain).
-$existing = Get-ItemProperty -Path $fxPropsPath -Name $EfxValueName -ErrorAction SilentlyContinue
-if ($null -ne $existing) {
-    $backupPath = Join-Path $BackupRoot $EndpointGuid
-    if (-not (Test-Path $backupPath)) { New-Item -Path $backupPath -Force | Out-Null }
-    Set-ItemProperty -Path $backupPath -Name $EfxValueName -Value $existing.$EfxValueName -Type MultiString
-    Write-Host "  Backed up existing EFX value to $backupPath"
-} else {
-    Write-Host "  No existing EFX value for this endpoint - nothing to back up."
-}
-
 # This key is TrustedInstaller-owned by default - a plain elevated Administrator cannot write to
 # it even though its DACL nominally allows SetValue (see Enable-TakeOwnershipPrivilege's comment
-# above). Take ownership first, every run - idempotent if we already own it.
+# above). Take ownership first, every run - idempotent if we already own it. Do this once for the
+# whole key before any of the four value writes below.
 $fxPropsRelativePath = $fxPropsPath -replace '^HKLM:\\', ''
 Write-Host "  Taking ownership of the FxProperties key (was TrustedInstaller-owned)..."
 Grant-AdministratorsOwnership -HklmRelativePath $fxPropsRelativePath
 
-# NOTE ON VALUE TYPE: this writes REG_MULTI_SZ per Phase 2's PotatoAPO-based research, but a live
-# reg.exe query against this test machine's existing (Realtek/Conexant vendor) EFX value showed
-# it stored as REG_SZ instead - an unresolved contradiction (see docs/windows-port.md). If audio
-# doesn't play correctly after registering (see the Restart-Service step below), that's the first
-# thing to try changing: swap -Type MultiString for -Type String and @($ApoClsid) for $ApoClsid.
-Set-ItemProperty -Path $fxPropsPath -Name $EfxValueName -Value @($ApoClsid) -Type MultiString
+function Set-FxPropertyBackedUp {
+    param([string]$Path, [string]$ValueName, [string[]]$NewValue, [string]$EndpointGuid)
 
-# Verify by readback.
-$readback = (Get-ItemProperty -Path $fxPropsPath -Name $EfxValueName).$EfxValueName
-if ($readback -notcontains $ApoClsid) {
-    throw "Wrote the FxProperties value but readback does not contain our CLSID - something is wrong."
+    $existing = Get-ItemProperty -Path $Path -Name $ValueName -ErrorAction SilentlyContinue
+    if ($null -ne $existing) {
+        $backupPath = Join-Path $BackupRoot $EndpointGuid
+        if (-not (Test-Path $backupPath)) { New-Item -Path $backupPath -Force | Out-Null }
+        Set-ItemProperty -Path $backupPath -Name $ValueName -Value $existing.$ValueName -Type MultiString
+        Write-Host "  Backed up existing '$ValueName' to $backupPath"
+    } else {
+        Write-Host "  No existing '$ValueName' for this endpoint - nothing to back up."
+    }
+
+    Set-ItemProperty -Path $Path -Name $ValueName -Value $NewValue -Type MultiString
+
+    # Verify by readback, not by trusting the call succeeded (hard-won lesson #1).
+    $readback = (Get-ItemProperty -Path $Path -Name $ValueName).$ValueName
+    foreach ($expected in $NewValue) {
+        if ($readback -notcontains $expected) {
+            throw "Wrote '$ValueName' but readback does not contain '$expected' - something is wrong."
+        }
+    }
+    Write-Host "  Verified: $ValueName = $readback"
 }
-Write-Host "  Verified: $fxPropsPath -> $EfxValueName = $readback"
+
+Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $SfxClsidValueName -NewValue @($ApoClsid) -EndpointGuid $EndpointGuid
+Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $MfxClsidValueName -NewValue @($ApoClsid) -EndpointGuid $EndpointGuid
+# Registering the CLSID alone only makes the APO discoverable - it must also be explicitly listed
+# as supporting the DEFAULT processing mode to actually be used for live streaming (see the header
+# comment's item 2). Rewritten explicitly here even if a pre-existing value already happened to
+# contain the same GUID, rather than trusting whatever was already there.
+Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $SfxModesValueName -NewValue @($DefaultModeGuid) -EndpointGuid $EndpointGuid
+Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $MfxModesValueName -NewValue @($DefaultModeGuid) -EndpointGuid $EndpointGuid
 
 Write-Host ""
-Write-Host "Done. Restart the Windows Audio service for the audio engine to pick up the new EFX chain:"
-Write-Host "  Restart-Service audiosrv -Force"
-Write-Host "This restarts ALL system audio momentarily - close anything sensitive first."
+Write-Host "Done. Force audiodg.exe to rebuild its graph so the audio engine picks up the new SFX+MFX chain:"
+Write-Host "  Stop-Process -Name audiodg -Force"
+Write-Host "It respawns automatically the moment any app plays audio again. This briefly interrupts"
+Write-Host "system audio - close anything sensitive first. (Restarting the audiosrv SERVICE does NOT"
+Write-Host "restart audiodg.exe - confirmed live; killing audiodg.exe directly is what's needed.)"
