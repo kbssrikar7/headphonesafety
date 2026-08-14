@@ -6,6 +6,15 @@
 # re-install or some other unsigned APO may still depend on it, and there is no reliable way to
 # know from here whether it is safe to revert.
 #
+# EFX ({d04e05a6-...},7) is included in the cleanup list below even though the current
+# register-apo.ps1 no longer writes to it - an earlier version of this project's tooling
+# (before the switch from EFX-only to SFX+MFX, documented in docs/windows-port.md's "Known
+# blocker" section) did register against EFX, and a machine that used that earlier version would
+# otherwise have no way to clean it up. Removing/restoring a value that was never actually set is
+# a safe no-op (Remove-ItemProperty with -ErrorAction SilentlyContinue, same as every other value
+# here), so including it unconditionally costs nothing for machines that never used the old
+# scheme.
+#
 # Must run elevated (writes under HKEY_LOCAL_MACHINE).
 [CmdletBinding()]
 param(
@@ -20,6 +29,7 @@ $ApoClsid = "{AAF92DEA-FFE0-4E91-94A4-39385AD5ECFD}"
 $FxValueNames = @(
     "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},5",  # SFX CLSID
     "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},6",  # MFX CLSID
+    "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7",  # EFX CLSID - legacy, see header comment above
     "{d3993a3f-99c2-4402-b5ec-a92a0367664b},5",  # SFX supported processing modes
     "{d3993a3f-99c2-4402-b5ec-a92a0367664b},6"   # MFX supported processing modes
 )

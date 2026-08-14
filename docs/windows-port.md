@@ -361,19 +361,62 @@ actual loading, and where it stands.
    `INTELAUDIO\FUNC_01&VEN_14F1&...` device, not just the logical AudioEndpoint) — forces a full
    driver re-enumeration, different from a reboot or process kill. Device came back healthy
    (`Status: OK`); still no load.
+9. **Tried against a second, completely different driver stack: Sony WH-CH720N Bluetooth
+   headphones (A2DP stereo profile).** Registered SFX+MFX against the Bluetooth endpoint the same
+   way, forced a fresh `audiodg.exe`, and measured actual output via loopback capture with a
+   properly isolated test (Volume Cap disabled so it couldn't confound the measurement, device
+   volume raised well above any clamp). Result: **identical, byte-for-byte peak measurement with
+   the limiter enabled vs. disabled** (-4.1 dB both times), and `apoProcessCallCount` stayed at 0
+   in both cases via the diagnostic shared-memory fields (see Section 4) — the exact same
+   signature as the Conexant speakers. **This rules out "Conexant-specific" as the sole
+   explanation** — the APO does not load on Windows' own Bluetooth A2DP audio stack either, a
+   completely different driver from Conexant's HD Audio codec. Still not conclusively a
+   fundamental Windows limitation (only two driver stacks tested, both on the same physical
+   machine/Windows build), but the working hypothesis should now weight toward "something about
+   this Windows 10 22H2 build's audio engine" rather than "this one vendor's driver."
 
-**Where this stands**: this is being treated as a genuine, unresolved, driver/machine-specific
-platform quirk, not a bug in this project's code. Per Microsoft's own documentation, some drivers
-architecturally cannot host an inserted endpoint APO because their mode mixing happens lower in
-the kernel-mode stack than where APO insertion is possible — this may simply be the case for this
-Conexant ISST driver on this Windows build. **If you're testing on different hardware (a
-different driver, e.g. Realtek's own non-Conexant stack, or Bluetooth headphones which use a
-completely different driver path), try the existing registration as-is first** — don't assume
-it's broken; it may just be this one driver. Diagnosing further would require kernel-level
-debugging (WinDbg attached to `audiodg.exe`), out of scope for a normal dev session. If Approach
-A proves unworkable across multiple driver stacks, not just this one, fall back to Approach B
-(documented above) — all the DSP/limiter code (`windows/apo/Limiter.h/.cpp`) is pure math with no
-Win32/COM dependencies and is directly reusable in a WASAPI-loopback-based implementation.
+**Where this stands**: this is being treated as a genuine, unresolved platform quirk, not a bug
+in this project's code — confirmed across two structurally unrelated driver stacks on the same
+machine. Per Microsoft's own documentation, some drivers architecturally cannot host an inserted
+endpoint APO because their mode mixing happens lower in the kernel-mode stack than where APO
+insertion is possible, but that explanation is weaker now that it reproduces on Bluetooth audio
+too (a Microsoft-owned stack, not a third-party vendor driver). **If you're testing on different
+hardware (a different physical machine, or a newer Windows 11 build), try the existing
+registration as-is first** — don't assume it's broken; it may be specific to this Windows 10
+22H2 build rather than to any particular driver. Diagnosing further would require kernel-level
+debugging (WinDbg attached to `audiodg.exe`) or testing on a genuinely different
+machine/Windows version, both out of scope for a normal dev session. If Approach A proves
+unworkable on other machines too, not just this one, fall back to Approach B (documented above)
+— all the DSP/limiter code (`windows/apo/Limiter.h/.cpp`) is pure math with no Win32/COM
+dependencies and is directly reusable in a WASAPI-loopback-based implementation.
+
+### A registration-script bug found and fixed while testing on Bluetooth (worth knowing about)
+
+While cleaning up after the Bluetooth test above, direct registry readback revealed
+`unregister-apo.ps1` had left the Speakers endpoint in a corrupted state from earlier in this
+same project's history — not caused by anything Bluetooth-specific, but only noticed at this
+point. Two compounding bugs, both now fixed in `register-apo.ps1`/`unregister-apo.ps1`:
+
+1. `unregister-apo.ps1`'s cleanup list was written after the registration scheme moved from
+   EFX-only (`,7`) to SFX+MFX (`,5`/`,6`) and never included EFX — so the original Phase 2
+   registration (which only ever touched EFX) was never cleaned up by any later unregister run.
+   Fixed by adding EFX back to the cleanup list (safe as a no-op on any endpoint that never used
+   the old scheme).
+2. An ad-hoc diagnostic script written live during this investigation (not part of the shipped
+   `register-apo.ps1`) wrote directly to the SFX slot to test an SFX+EFX combination, bypassing
+   the backup mechanism entirely. When the real, corrected `register-apo.ps1` later ran against
+   the same endpoint, it "backed up" what it found there — which was already our own CLSID from
+   the bypassed write, not the genuine original (which was absent). A later `unregister-apo.ps1`
+   run then "restored" that corrupted backup, silently failing to actually revert anything.
+   Fixed two ways: `Set-FxPropertyBackedUp` now refuses to back up a value that already equals
+   our own CLSID (the actual guard against this failure mode recurring), and the corrupted state
+   on this machine was manually repaired via direct registry restoration to the confirmed genuine
+   original values (verified via the very first FxProperties dump taken in this session, before
+   any registration had occurred).
+
+Lesson: an ad-hoc diagnostic script that bypasses a project's own backup/rollback tooling, even
+temporarily during debugging, can corrupt the state that tooling relies on for future runs. Worth
+remembering for any future live registry debugging on this project.
 
 ---
 

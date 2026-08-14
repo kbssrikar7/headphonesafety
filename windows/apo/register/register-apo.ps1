@@ -246,7 +246,17 @@ function Set-FxPropertyBackedUp {
     param([string]$Path, [string]$ValueName, [string[]]$NewValue, [string]$EndpointGuid)
 
     $existing = Get-ItemProperty -Path $Path -Name $ValueName -ErrorAction SilentlyContinue
-    if ($null -ne $existing) {
+    if ($null -ne $existing -and $existing.$ValueName -contains $ApoClsid) {
+        # Defensive guard against a real bug found and fixed live in this project: if what's
+        # "already there" is already OUR OWN CLSID (e.g. from an interrupted prior run, a bypassed
+        # backup during ad-hoc debugging, or simply re-running this script without unregistering
+        # first), backing it up would corrupt the backup with our own value instead of the genuine
+        # original - and a later unregister would then "restore" our own CLSID right back,
+        # silently failing to actually revert anything. Skip the backup in this case; the existing
+        # backup (if any, from before we were first registered) is left untouched and still
+        # correct.
+        Write-Host "  '$ValueName' already holds our own CLSID - not backing up (would corrupt the real backup)."
+    } elseif ($null -ne $existing) {
         $backupPath = Join-Path $BackupRoot $EndpointGuid
         if (-not (Test-Path $backupPath)) { New-Item -Path $backupPath -Force | Out-Null }
         Set-ItemProperty -Path $backupPath -Name $ValueName -Value $existing.$ValueName -Type MultiString

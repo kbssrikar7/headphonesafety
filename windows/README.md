@@ -48,15 +48,18 @@ The actual signal-level protection, equivalent to iOS's Reduce Loud Sounds.
   a separate capture process, it never touches any microphone/audio-capture permission surface —
   **no permission prompt of any kind**, unlike the macOS build (which needs Microphone + Screen
   Recording access) or a WASAPI-loopback-based approach.
-- **Known limitation, please read before relying on this**: whether the APO actually gets loaded
-  by Windows' audio engine depends on your specific audio driver. It's confirmed correctly built
-  and registered (verified via direct COM instantiation and registry readback surviving a full
-  reboot), but on the primary development machine's Conexant ISST driver, the audio engine never
-  loads it — confirmed via live ETW tracing showing the APO is never even attempted for
-  discovery, after trying every fix short of kernel debugging (service restart, process kill,
-  full reboot, PnP re-enumeration). This may be driver-specific rather than a fundamental Windows
-  limitation. See [`docs/windows-port.md`](../docs/windows-port.md)'s "Known blocker" section for
-  the full investigation. **Try it on your own hardware — it may just work.**
+- **Known limitation, please read before relying on this**: it's confirmed correctly built and
+  registered (verified via direct COM instantiation and registry readback surviving a full
+  reboot), but on the primary development machine, Windows' audio engine never actually loads it
+  — confirmed via live ETW tracing showing the APO is never even attempted for discovery, after
+  trying every fix short of kernel debugging (service restart, process kill, full reboot, PnP
+  re-enumeration). **Tested on two structurally unrelated driver stacks on this same machine**
+  (Conexant HD Audio built-in speakers, and Sony WH-CH720N Bluetooth A2DP headphones) with the
+  identical result both times — the isolated Bluetooth test measured byte-for-byte identical
+  output with the limiter enabled vs. disabled. This weakens "one vendor's driver is the problem"
+  as an explanation; it may be specific to this Windows 10 22H2 build rather than any particular
+  driver. See [`docs/windows-port.md`](../docs/windows-port.md)'s "Known blocker" section for the
+  full investigation. **Try it on your own machine — it may just work.**
 
 ## How it works
 
