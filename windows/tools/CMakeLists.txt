@@ -10,3 +10,10 @@ target_compile_definitions(loopback_capture PRIVATE UNICODE _UNICODE)
 add_executable(shared_state_dump shared_state_dump.cpp)
 target_link_libraries(shared_state_dump PRIVATE hps_shared)
 target_compile_definitions(shared_state_dump PRIVATE UNICODE _UNICODE)
+
+# shared_state_write: a throwaway diagnostic tool (not shipped) that writes to the tray<->APO
+# shared-memory mapping - used by watchdog.ps1 to force-disable the limiter as a dev-time safety
+# net (hard-won lesson #6).
+add_executable(shared_state_write shared_state_write.cpp)
+target_link_libraries(shared_state_write PRIVATE hps_shared)
+target_compile_definitions(shared_state_write PRIVATE UNICODE _UNICODE)
