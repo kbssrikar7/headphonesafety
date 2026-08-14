@@ -35,7 +35,7 @@ whatever mechanism is idiomatic there:
 |---|---|---|
 | macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `v*`) |
 | Linux | Shipping (Ubuntu 24.04 GNOME tested; `.deb` is Debian/Ubuntu-family only, see [`linux/README.md`](linux/README.md#requirements-ubuntu-or-any-linux) for other distros) | [`linux/`](linux/) — [README](linux/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `linux-v*`) |
-| Windows | Architecture guide only, not yet built | [`docs/windows-port.md`](docs/windows-port.md) |
+| Windows | Volume Cap shipping and fully working; Real-Time Limiter built and correctly registered but blocked from loading on the primary dev machine's audio driver (may work on other hardware — see [`windows/README.md`](windows/README.md) for the "Known limitation" note) | [`windows/`](windows/) — [README](windows/README.md) |
 | Android | Architecture guide only, not yet built | [`docs/android-port.md`](docs/android-port.md) |
 
 Each shipping platform is a self-contained subdirectory with its own build, install, and usage
@@ -46,7 +46,9 @@ the record of *why* each platform's design looks the way it does:
 
 - [Windows](docs/windows-port.md) — via a Windows Audio Processing Object, with real-world
   precedent ([Equalizer APO](https://sourceforge.net/projects/equalizerapo/)) showing it's
-  achievable without a permission prompt at runtime.
+  achievable without a permission prompt at runtime. Now the build log too: confirmed correct
+  registration end-to-end, plus a real, previously-undocumented registry-ownership blocker found
+  and fixed along the way — see the doc's "Known blocker" section for what's still unresolved.
 - [Ubuntu / Linux](docs/ubuntu-port.md) — the most favorable of the platforms researched, and the
   one this repo's `linux/` was actually built from: PipeWire's built-in monitor sources need no
   virtual driver and, for a native (non-Flatpak) app, no permission prompt at all.

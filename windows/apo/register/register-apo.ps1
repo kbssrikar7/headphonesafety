@@ -276,6 +276,14 @@ Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $MfxClsidValueName -NewValu
 Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $SfxModesValueName -NewValue @($DefaultModeGuid) -EndpointGuid $EndpointGuid
 Set-FxPropertyBackedUp -Path $fxPropsPath -ValueName $MfxModesValueName -NewValue @($DefaultModeGuid) -EndpointGuid $EndpointGuid
 
+# Track which endpoints this machine has registered against, unconditionally (regardless of
+# whether there was a pre-existing value to back up above) - so uninstall.ps1 can find every
+# touched endpoint and clean it up without having to re-derive the list by re-enumerating
+# currently-present devices, which could miss one that was unplugged/renamed since install.
+$trackingPath = "HKCU:\Software\HeadphoneSafety\RegisteredEndpoints"
+if (-not (Test-Path $trackingPath)) { New-Item -Path $trackingPath -Force | Out-Null }
+Set-ItemProperty -Path $trackingPath -Name $EndpointGuid -Value 1 -Type DWord
+
 Write-Host ""
 Write-Host "Done. Force audiodg.exe to rebuild its graph so the audio engine picks up the new SFX+MFX chain:"
 Write-Host "  Stop-Process -Name audiodg -Force"

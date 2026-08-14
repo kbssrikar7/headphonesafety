@@ -57,6 +57,11 @@ if (Test-Path $fxPropsPath) {
     Write-Host "No FxProperties key found for {$EndpointGuid} - nothing to remove there."
 }
 
+# Remove this endpoint from the install-time tracking list (see register-apo.ps1's matching
+# addition) so uninstall.ps1's cleanup pass does not try it again.
+$trackingPath = "HKCU:\Software\HeadphoneSafety\RegisteredEndpoints"
+Remove-ItemProperty -Path $trackingPath -Name $EndpointGuid -ErrorAction SilentlyContinue
+
 $resolvedDllPath = $null
 try { $resolvedDllPath = (Resolve-Path $DllPath -ErrorAction Stop).Path } catch {}
 if ($resolvedDllPath) {
@@ -70,4 +75,6 @@ if ($resolvedDllPath) {
 }
 
 Write-Host ""
-Write-Host "Done. Restart-Service audiosrv -Force (or reboot) to make the audio engine drop this APO."
+Write-Host "Done. Stop-Process -Name audiodg -Force to make the audio engine drop this APO now"
+Write-Host "(it respawns automatically on next playback). Restarting the audiosrv SERVICE does NOT"
+Write-Host "restart audiodg.exe - confirmed live; killing audiodg.exe directly is what's needed."
