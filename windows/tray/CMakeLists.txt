@@ -6,7 +6,10 @@
 # TimeoutRunner.cpp (hard-won lesson #3: never let a hung Win32/COM call block the poll loop
 # forever) and DeviceWatcher.cpp (hard-won lesson #4: react to device changes unconditionally,
 # without querying the specific device that changed). Phase 5 adds the full TrayIcon.cpp
-# Shell_NotifyIcon menu. See C:\Users\kbs\.claude\plans\ok-so-now-you-enumerated-fog.md.
+# Shell_NotifyIcon menu (device status, Volume Cap + Real-Time Limiter checkboxes, headroom radio
+# group, Quit), which moves Volume Cap/DeviceWatcher polling onto a background thread so the main
+# thread is free to pump window messages. See
+# C:\Users\kbs\.claude\plans\ok-so-now-you-enumerated-fog.md.
 add_executable(HeadphoneSafetyTray WIN32
     main.cpp
     Settings.cpp
@@ -14,6 +17,7 @@ add_executable(HeadphoneSafetyTray WIN32
     SharedStateServer.cpp
     TimeoutRunner.cpp
     DeviceWatcher.cpp
+    TrayIcon.cpp
 )
 
 target_link_libraries(HeadphoneSafetyTray PRIVATE hps_shared ole32 shell32)

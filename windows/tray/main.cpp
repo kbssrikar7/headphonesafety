@@ -1,25 +1,21 @@
 // HeadphoneSafetyTray entry point.
 //
 // Phase 1 built Volume Cap enforcement (--test-cap allocates a console and logs every poll tick;
-// see VolumeCap.cpp - untouched by Phase 3/4). Phase 3 adds SharedStateServer: the tray's normal
-// (non-test-cap) background loop also pushes the current limiter enabled/headroom settings into
-// the shared-memory mapping every tick, so HeadphoneSafetyApo.dll's real-time thread can read
-// them. --enable-limiter/--disable-limiter persist that setting and exit immediately - no tray UI
-// exists yet (Phase 5 adds it), so this is how a live end-to-end limiter test is driven: run
-// --enable-limiter once, then launch the tray normally so its loop keeps pushing the live setting
-// while a separate process plays audio through the registered APO.
+// see VolumeCap.cpp - untouched since). Phase 3 added SharedStateServer (pushes limiter
+// enabled/headroom into shared memory for HeadphoneSafetyApo.dll's real-time thread to read).
+// Phase 4 hardened the background loop: TimeoutRunner (hard-won lesson #3 - a hung Win32/COM call
+// against a mid-disconnect device can never freeze this loop forever) and DeviceWatcher (hard-won
+// lesson #4 - react to device-list changes unconditionally, without querying the specific device
+// that changed).
 //
-// Phase 4 hardens the normal-mode loop per two of the macOS build's hard-won lessons
-// (docs/windows-port.md): #3, every poll tick's Win32/COM work now runs through a TimeoutRunner
-// so a hang (e.g. a device mid-disconnect) can never freeze this loop forever; #4, a DeviceWatcher
-// (IMMNotificationClient) reacts to device-list changes unconditionally, without ever querying
-// the specific device that changed, by just flagging the next regular poll tick to happen
-// immediately rather than waiting out the rest of the 350ms cadence.
+// Phase 5 (this revision): adds the real Shell_NotifyIcon tray UI (TrayIcon.h/.cpp). This requires
+// a real Win32 message loop on the main thread (Shell_NotifyIcon/TrackPopupMenu both need one),
+// which the old single-threaded "while (true) { ...; Sleep(350); }" design didn't have - that
+// background work now runs on a dedicated worker thread instead, leaving the main thread free to
+// pump messages for TrayIcon's hidden window. See BackgroundThreadProc below.
 //
-// --test-cap intentionally stays exactly as it was in Phase 1 (does not push shared state, does
-// not use TimeoutRunner/DeviceWatcher) - RunVolumeCapTestLoop is VolumeCap.cpp's self-contained
-// loop and this file does not modify VolumeCap.cpp. Use the normal (no-flag) launch mode for a
-// combined Volume Cap + limiter test, or to exercise the Phase 4 hardening.
+// --test-cap/--enable-limiter/--disable-limiter all continue to exit before any of this UI/thread
+// machinery starts, exactly as in every prior phase.
 #include <windows.h>
 #include <shellapi.h>
 
@@ -29,6 +25,7 @@
 #include "Settings.h"
 #include "SharedStateServer.h"
 #include "TimeoutRunner.h"
+#include "TrayIcon.h"
 #include "VolumeCap.h"
 
 namespace {
@@ -54,9 +51,82 @@ void EnsureConsoleIfNeeded() {
     }
 }
 
+struct BackgroundContext {
+    hps::Settings* settings;
+    hps::SharedStateServer* sharedState;
+    volatile LONG* stopFlag;
+};
+
+// Runs on its own thread so a hung Win32/COM call (TimeoutRunner's whole reason to exist) can
+// never freeze the main thread's message pump, which TrayIcon's Shell_NotifyIcon/context menu
+// depend on staying responsive.
+//
+// Reads settings->headroomDb/volumeCapEnabled/limiterEnabled without a lock, concurrently with
+// TrayIcon mutating them on the main thread in response to menu clicks. This is an accepted,
+// benign race, not an oversight: each field is a native-width (bool or 8-byte-aligned double)
+// value that doesn't tear on x86/x64, and using a one-tick-stale value here has the same harmless
+// consequence hps_shared_state.h's own IPC fields already accept ("eventually consistent... a
+// one-buffer-stale value is inaudible"). Adding a lock would add real complexity for a benefit
+// that doesn't matter for this data.
+DWORD WINAPI BackgroundThreadProc(LPVOID param) {
+    auto* ctx = reinterpret_cast<BackgroundContext*>(param);
+
+    // COM apartments are per-thread - the main thread's CoInitializeEx does not cover this
+    // thread. Both threads use COINIT_MULTITHREADED, so they join the same process-wide MTA;
+    // that's what makes it safe for CoCreateInstance-produced interface pointers to work
+    // correctly per-thread without needing cross-apartment marshaling.
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+    hps::DeviceWatcher deviceWatcher;
+    if (!deviceWatcher.IsRegistered()) {
+        fwprintf(stderr,
+                  L"[background] DeviceWatcher failed to register - falling back to plain "
+                  L"350ms polling only (no fast reaction to device changes)\n");
+    }
+
+    hps::TimeoutRunner pollRunner;
+    constexpr DWORD kPollTimeoutMs = 2000;
+
+    while (!InterlockedCompareExchange(ctx->stopFlag, 0, 0)) {
+        // Unconditional per hard-won lesson #4 - a device-list change just means "try again now
+        // instead of waiting out the rest of this cycle," not "go query what changed."
+        if (deviceWatcher.ConsumeChangeFlag()) {
+            fwprintf(stderr, L"[background] device change detected, polling immediately\n");
+        }
+
+        if (ctx->settings->volumeCapEnabled) {
+            double headroomDbSnapshot = ctx->settings->headroomDb;
+            bool completed = pollRunner.Run(
+                [headroomDbSnapshot]() { hps::EnforceVolumeCap(headroomDbSnapshot); },
+                kPollTimeoutMs);
+            if (!completed) {
+                fwprintf(stderr,
+                          L"[background] poll tick appears hung (exceeded %lums) - skipping "
+                          L"this tick, will retry next cycle\n",
+                          kPollTimeoutMs);
+            }
+        }
+
+        ctx->sharedState->SetLimiterEnabled(ctx->settings->limiterEnabled);
+        ctx->sharedState->SetHeadroomDb(ctx->settings->headroomDb);
+        ctx->sharedState->Heartbeat();
+        fflush(stderr);
+
+        // Slept in small increments rather than one Sleep(350) so the stop flag (checked at the
+        // top of this loop) is noticed within ~50ms of being set, not up to 350ms late - process
+        // shutdown doesn't need to be instant, but shouldn't be needlessly sluggish either.
+        for (int i = 0; i < 7 && !InterlockedCompareExchange(ctx->stopFlag, 0, 0); ++i) {
+            Sleep(50);
+        }
+    }
+
+    CoUninitialize();
+    return 0;
+}
+
 }  // namespace
 
-int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool testCap = argv && HasFlag(argc, argv, L"--test-cap");
@@ -85,60 +155,41 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     if (testCap) {
         hps::RunVolumeCapTestLoop(settings.headroomDb);
     } else {
-        // Diagnostic-only: makes DeviceWatcher/TimeoutRunner log lines observable when this is
-        // launched from a terminal for live testing, exactly like --test-cap already does. If
-        // launched normally (e.g. an eventual autostart entry, no inherited console), this is a
-        // silent no-op - EnsureConsoleIfNeeded only allocates one when nothing was inherited, and
-        // nothing here depends on a console actually being present.
+        // Diagnostic-only: makes background-thread/DeviceWatcher log lines observable when this
+        // is launched from a terminal for live testing. If launched normally (e.g. an eventual
+        // autostart entry, no inherited console), this is a silent no-op.
         EnsureConsoleIfNeeded();
 
         hps::SharedStateServer sharedState;
         sharedState.SetLimiterEnabled(settings.limiterEnabled);
         sharedState.SetHeadroomDb(settings.headroomDb);
 
-        hps::DeviceWatcher deviceWatcher;
-        if (!deviceWatcher.IsRegistered()) {
-            fwprintf(stderr,
-                      L"[main] DeviceWatcher failed to register - falling back to plain "
-                      L"350ms polling only (no fast reaction to device changes)\n");
+        volatile LONG stopFlag = 0;
+        BackgroundContext ctx{&settings, &sharedState, &stopFlag};
+        HANDLE backgroundThread = CreateThread(nullptr, 0, &BackgroundThreadProc, &ctx, 0, nullptr);
+
+        hps::TrayIcon trayIcon(hInstance, &settings, &sharedState);
+        if (!trayIcon.IsValid()) {
+            fwprintf(stderr, L"[main] TrayIcon failed to create its window - no tray icon will "
+                              L"be shown, but Volume Cap keeps running in the background\n");
         }
 
-        hps::TimeoutRunner pollRunner;
-        constexpr DWORD kPollTimeoutMs = 2000;
+        MSG msg;
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
 
-        while (true) {
-            // Unconditional per hard-won lesson #4 - a device-list change just means "try again
-            // now instead of waiting out the rest of this cycle," not "go query what changed."
-            if (deviceWatcher.ConsumeChangeFlag()) {
-                fwprintf(stderr, L"[main] device change detected, polling immediately\n");
-            }
-
-            if (settings.volumeCapEnabled) {
-                // Capture by value, not by reference to `settings` - if this tick times out and
-                // the worker thread is abandoned (see TimeoutRunner's class comment), it may still
-                // be running when a later iteration mutates `settings` (once Phase 5's tray menu
-                // can do that); a stale snapshot from the moment this tick started is safe, a
-                // live reference into a struct that might be concurrently written is not.
-                double headroomDbSnapshot = settings.headroomDb;
-                bool completed = pollRunner.Run(
-                    [headroomDbSnapshot]() { hps::EnforceVolumeCap(headroomDbSnapshot); },
-                    kPollTimeoutMs);
-                if (!completed) {
-                    fwprintf(stderr,
-                              L"[main] poll tick appears hung (exceeded %lums) - skipping this "
-                              L"tick, will retry next cycle\n",
-                              kPollTimeoutMs);
-                }
-            }
-
-            // Re-pushed every tick, not just once at startup, so a future Phase 5 tray menu that
-            // mutates `settings` interactively only has to change the in-memory struct - this
-            // loop already keeps the shared mapping in sync with it.
-            sharedState.SetLimiterEnabled(settings.limiterEnabled);
-            sharedState.SetHeadroomDb(settings.headroomDb);
-            sharedState.Heartbeat();
-            fflush(stderr);
-            Sleep(350);
+        // WM_QUIT received (from TrayIcon's Quit menu item) - stop the background thread before
+        // exiting. TimeoutRunner inside it always returns within kPollTimeoutMs per call, so the
+        // loop notices the stop flag within roughly that bound even in the worst case (a
+        // genuinely hung poll tick) - 3000ms comfortably covers that; if it somehow still hasn't
+        // joined by then, proceed anyway rather than hang process exit on it (process teardown
+        // reclaims the thread regardless).
+        if (backgroundThread) {
+            InterlockedExchange(&stopFlag, 1);
+            WaitForSingleObject(backgroundThread, 3000);
+            CloseHandle(backgroundThread);
         }
     }
 
