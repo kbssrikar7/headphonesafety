@@ -1,27 +1,20 @@
 <resources>
     <string name="app_name">Headphone Safety</string>
-    <string name="enable_volume_cap">Enable Volume Cap</string>
-    <string name="headroom_label">Headroom (approximate — Android has no native dB scale for stream volume)</string>
+    <string name="enable_headphone_safety">Enable Headphone Safety</string>
+    <string name="headroom_label">Headroom (an approximate stream-volume percentage — Android has no native dB scale for it. Also drives the Real-Time Limiter\'s on/off state, but not its ceiling: that\'s fixed by the device, see below)</string>
     <string name="headroom_0">0%</string>
     <string name="headroom_5">5%</string>
     <string name="headroom_10">10%</string>
     <string name="headroom_15">15%</string>
     <string name="headroom_20">20%</string>
-    <string name="status_disabled">Volume Cap is off.</string>
-    <string name="status_running">Volume Cap is on (%1$d%% headroom) — active only while headphones or Bluetooth audio are connected.</string>
+    <string name="status_disabled">Headphone Safety is off.</string>
+    <string name="status_running">Headphone Safety is on (%1$d%% volume headroom) — active only while headphones or Bluetooth audio are connected.</string>
     <string name="status_capping">Headphone Safety — capping volume</string>
     <string name="status_no_headphones">Headphone Safety — no headphones connected</string>
     <string name="stop_action">Turn off</string>
 
-    <string name="enable_limiter">Enable Real-Time Limiter (experimental)</string>
-    <string name="limiter_headroom_label">Limiter ceiling (true dB, where the device honors it — on Samsung devices tested, this is fixed at ~-2dB regardless of the choice below)</string>
-    <string name="limiter_db_0">0 dB</string>
-    <string name="limiter_db_5">5 dB</string>
-    <string name="limiter_db_10">10 dB</string>
-    <string name="limiter_db_15">15 dB</string>
-    <string name="limiter_db_20">20 dB</string>
-    <string name="limiter_status_no_dump">Real-Time Limiter needs one-time setup from a computer: run\nadb shell pm grant %1$s android.permission.DUMP\nCoverage is partial even after that — see android/README.md.</string>
-    <string name="limiter_status_active">Real-Time Limiter: protecting %1$d active audio session(s). Coverage is per-app, not universal.</string>
+    <string name="limiter_status_no_dump">Real-Time Limiter (extra protection for supported apps) needs one-time setup from a computer: run\nadb shell pm grant %1$s android.permission.DUMP\nCoverage is partial even after that — see android/README.md.</string>
+    <string name="limiter_status_active">Real-Time Limiter: protecting %1$d active audio session(s) at a fixed ceiling (not adjustable by the headroom above on devices tested). Coverage is per-app, not universal.</string>
     <string name="limiter_status_active_uncertain">Real-Time Limiter: protecting %1$d active audio session(s) (best-effort detection — this Android build\'s internal audio report format differs from what this app expects). Coverage is per-app, not universal.</string>
     <string name="limiter_status_unsupported_device">Real-Time Limiter isn\'t available on this device — its audio system has no dynamics-processing effect for this app to use. This varies by phone maker/chipset.</string>
     <string name="limiter_status_off">Real-Time Limiter is off.</string>

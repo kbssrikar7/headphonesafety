@@ -15,7 +15,8 @@ import android.os.Build
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        if (!Prefs.isEnabled(context) && !Prefs.isLimiterEnabled(context)) return
+        Prefs.migrateIfNeeded(context)
+        if (!Prefs.isUnifiedEnabled(context)) return
 
         val serviceIntent = Intent(context, VolumeCapService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

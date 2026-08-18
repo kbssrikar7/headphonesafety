@@ -28,8 +28,6 @@ class MainActivity : Activity() {
     private lateinit var enableSwitch: Switch
     private lateinit var headroomGroup: RadioGroup
     private lateinit var statusText: TextView
-    private lateinit var limiterSwitch: Switch
-    private lateinit var limiterHeadroomGroup: RadioGroup
     private lateinit var limiterStatusText: TextView
     private lateinit var batteryStatusText: TextView
     private lateinit var batterySettingsButton: Button
@@ -51,13 +49,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Prefs.migrateIfNeeded(this)
         setContentView(R.layout.activity_main)
 
         enableSwitch = findViewById(R.id.enableSwitch)
         headroomGroup = findViewById(R.id.headroomGroup)
         statusText = findViewById(R.id.statusText)
-        limiterSwitch = findViewById(R.id.limiterSwitch)
-        limiterHeadroomGroup = findViewById(R.id.limiterHeadroomGroup)
         limiterStatusText = findViewById(R.id.limiterStatusText)
         batteryStatusText = findViewById(R.id.batteryStatusText)
         batterySettingsButton = findViewById(R.id.batterySettingsButton)
@@ -85,49 +82,30 @@ class MainActivity : Activity() {
         val radioIds = intArrayOf(
             R.id.headroom0, R.id.headroom5, R.id.headroom10, R.id.headroom15, R.id.headroom20
         )
-        val currentIndex = Prefs.headroomPresets.indexOf(Prefs.headroomPercent(this)).coerceAtLeast(0)
+        val currentIndex =
+            Prefs.headroomPresets.indexOf(Prefs.unifiedHeadroomPercent(this)).coerceAtLeast(0)
         headroomGroup.check(radioIds[currentIndex])
         headroomGroup.setOnCheckedChangeListener { _, checkedId ->
             val index = radioIds.indexOf(checkedId)
             if (index >= 0) {
-                Prefs.setHeadroomPercent(this, Prefs.headroomPresets[index])
-                if (Prefs.isEnabled(this)) startCapService()
+                Prefs.setUnifiedHeadroomPercent(this, Prefs.headroomPresets[index])
+                if (Prefs.isUnifiedEnabled(this)) startCapService()
             }
         }
 
-        val limiterRadioIds = intArrayOf(
-            R.id.limiterDb0, R.id.limiterDb5, R.id.limiterDb10, R.id.limiterDb15, R.id.limiterDb20
-        )
-        val currentLimiterIndex =
-            Prefs.headroomPresets.indexOf(Prefs.limiterHeadroomDb(this)).coerceAtLeast(0)
-        limiterHeadroomGroup.check(limiterRadioIds[currentLimiterIndex])
-        limiterHeadroomGroup.setOnCheckedChangeListener { _, checkedId ->
-            val index = limiterRadioIds.indexOf(checkedId)
-            if (index >= 0) {
-                Prefs.setLimiterHeadroomDb(this, Prefs.headroomPresets[index])
-                if (Prefs.isLimiterEnabled(this)) startCapService()
-            }
-        }
-
-        enableSwitch.isChecked = Prefs.isEnabled(this)
+        enableSwitch.isChecked = Prefs.isUnifiedEnabled(this)
         enableSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
-            Prefs.setEnabled(this, checked)
+            Prefs.setUnifiedEnabled(this, checked)
             applyServiceState()
             updateStatusText()
-        }
-
-        limiterSwitch.isChecked = Prefs.isLimiterEnabled(this)
-        limiterSwitch.setOnCheckedChangeListener { _: CompoundButton, checked: Boolean ->
-            Prefs.setLimiterEnabled(this, checked)
-            applyServiceState()
             updateLimiterStatusText()
         }
 
-        // Cold-launch auto-resume: isChecked above was set before these listeners attached, so
+        // Cold-launch auto-resume: isChecked above was set before this listener attached, so
         // it doesn't start the service on its own. Without this, re-opening the app after the
         // system kills the background service (or after using it fresh post-install) leaves
         // Prefs saying "enabled" while nothing is actually running to back that up.
-        if (Prefs.isEnabled(this) || Prefs.isLimiterEnabled(this)) {
+        if (Prefs.isUnifiedEnabled(this)) {
             requestNotificationPermissionThenStart()
         }
 
@@ -138,8 +116,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        enableSwitch.isChecked = Prefs.isEnabled(this)
-        limiterSwitch.isChecked = Prefs.isLimiterEnabled(this)
+        enableSwitch.isChecked = Prefs.isUnifiedEnabled(this)
         updateStatusText()
         updateBatteryStatusText()
         uiHandler.post(limiterStatusRunnable)
@@ -158,8 +135,8 @@ class MainActivity : Activity() {
     }
 
     private fun updateStatusText() {
-        statusText.text = if (Prefs.isEnabled(this)) {
-            getString(R.string.status_running, Prefs.headroomPercent(this))
+        statusText.text = if (Prefs.isUnifiedEnabled(this)) {
+            getString(R.string.status_running, Prefs.unifiedHeadroomPercent(this))
         } else {
             getString(R.string.status_disabled)
         }
@@ -199,7 +176,7 @@ class MainActivity : Activity() {
 
     private fun updateLimiterStatusText() {
         limiterStatusText.text = when {
-            !Prefs.isLimiterEnabled(this) -> getString(R.string.limiter_status_off)
+            !Prefs.isUnifiedEnabled(this) -> getString(R.string.limiter_status_off)
             !LimiterStatus.dumpGranted -> getString(R.string.limiter_status_no_dump, packageName)
             LimiterStatus.deviceSupportsLimiter == false ->
                 getString(R.string.limiter_status_unsupported_device)
@@ -209,9 +186,8 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Service should run whenever either feature is on; stop only once both are off. */
     private fun applyServiceState() {
-        if (Prefs.isEnabled(this) || Prefs.isLimiterEnabled(this)) {
+        if (Prefs.isUnifiedEnabled(this)) {
             requestNotificationPermissionThenStart()
         } else {
             stopCapService()

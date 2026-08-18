@@ -151,9 +151,12 @@ back -2.0). This is Samsung's `libdynproc.so` HAL implementation, not an app-cod
 "a successful call is not proof it took effect" lesson this project has hit on every platform,
 this time surfacing as a parameter that silently clamps rather than a routing change that silently
 no-ops. Net effect: on this specific device, the headroom preset the user picks for the limiter
-does not currently change limiting behavior — everything limits at a fixed ~-2 dB ceiling, which
-still provides genuine peak-limiting protection (a real ceiling on clipping-level transients) but
-not the adjustable-headroom behavior the UI advertises. Unconfirmed whether this is Samsung-wide,
+does not currently change limiting behavior — the effect stays attached at a fixed threshold
+readback of -2.0 dB, confirmed genuinely live in the audio graph (not just a successful API call —
+see the effect-chain diff below), but not the adjustable-headroom behavior the UI advertises. The
+actual acoustic attenuation this fixed threshold produces hasn't been independently measured — the
+chain-diff confirms activation, not magnitude; don't read "-2.0 dB readback" as "confirmed -2 dB of
+real limiting." Unconfirmed whether this is Samsung-wide,
 One-UI-version-specific, or would behave differently on Pixel/AOSP-reference or other OEM
 implementations — flagged in `android/README.md` as a known, honestly-documented device-dependent
 limitation rather than something the app can control from userspace.
@@ -212,10 +215,12 @@ moved. **Honest conclusion, per the plan's own stopping rule: this Samsung `libd
 implementation exposes no adjustable gain/threshold parameter anywhere in `DynamicsProcessing`
 that userspace can actually move** — `setEnabled()` is real and does insert/remove the effect
 from the live audio graph (proven above), but every numeric parameter that would change *how
-much* it does is clamped back to a fixed default. The Real-Time Limiter's only real, working
-behavior on this device is therefore binary: a fixed ~-2 dB peak ceiling, on or off, with no
-adjustable headroom — which is what `android/README.md` and the unified-toggle design (step 4)
-must state plainly rather than imply a working dB slider. This experiment code was reverted after
+much* it does is clamped back to a fixed default. The Real-Time Limiter's only controllable
+behavior on this device is therefore binary — on or off — with the threshold parameter permanently
+reading back -2.0 dB whenever it's on; that reading is confirmed live in the audio graph, not its
+actual acoustic attenuation, which hasn't been independently measured. No adjustable headroom
+exists — which is what `android/README.md` and the unified-toggle design (step 4) must state
+plainly rather than imply a working dB slider. This experiment code was reverted after
 testing (each arm modified and rebuilt `SessionLimiterManager.attach()` in place, one at a time,
 then restored to the clean committed baseline) rather than left in the shipped path, since none of
 the three worked.

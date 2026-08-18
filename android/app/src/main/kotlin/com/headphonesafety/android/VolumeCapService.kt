@@ -48,6 +48,14 @@ class VolumeCapService : Service() {
         // rather than forking a dumpsys process per burst event.
         private const val PLAYBACK_CALLBACK_DEBOUNCE_MS = 300L
         private const val TAG = "HPS-VolumeCapService"
+        // The Limiter's threshold parameter is confirmed inert on every Samsung device tested —
+        // silently clamped to -2.0 dB regardless of what's requested, and every other candidate
+        // gain parameter (postGain, MBC, PreEq) tested the same way (docs/android-port.md's
+        // "Clamp-workaround arms" note). No UI control exposes this value anymore since it does
+        // nothing; the constant exists only because SessionLimiterManager.attach() still needs
+        // *a* number to pass to setThreshold(), and 2 keeps that call's behavior legible/consistent
+        // with the documented ceiling in case a future non-Samsung device does honor it.
+        private const val LIMITER_FIXED_HEADROOM_DB = 2
 
         private val HEADPHONE_TYPES = buildSet {
             add(AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
@@ -97,7 +105,7 @@ class VolumeCapService : Service() {
     }
 
     private val debouncedLimiterScan = Runnable {
-        if (Prefs.isLimiterEnabled(this)) {
+        if (Prefs.isUnifiedEnabled(this)) {
             Log.d(TAG, "out-of-cycle limiter scan triggered by AudioPlaybackCallback")
         }
         // Cancel any already-scheduled regular tick and let this run take its place — running
@@ -126,7 +134,7 @@ class VolumeCapService : Service() {
         override fun run() {
             LimiterStatus.dumpGranted = limiterManager.hasDumpPermission()
             when {
-                !Prefs.isLimiterEnabled(this@VolumeCapService) -> limiterManager.releaseAll()
+                !Prefs.isUnifiedEnabled(this@VolumeCapService) -> limiterManager.releaseAll()
                 // No reason to fork `dumpsys` and re-discover sessions while nothing would be
                 // enabled anyway — real battery win on top of the per-session setEnabled sync,
                 // since the poll would otherwise keep running (and finding sessions to silently
@@ -141,11 +149,12 @@ class VolumeCapService : Service() {
     }
 
     private fun refreshLimiter() {
-        limiterManager.refresh(Prefs.limiterHeadroomDb(this), headphoneActive)
+        limiterManager.refresh(LIMITER_FIXED_HEADROOM_DB, headphoneActive)
     }
 
     override fun onCreate() {
         super.onCreate()
+        Prefs.migrateIfNeeded(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         limiterManager = SessionLimiterManager(this)
         audioManager.registerAudioDeviceCallback(deviceCallback, null)
@@ -158,8 +167,7 @@ class VolumeCapService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            Prefs.setEnabled(this, false)
-            Prefs.setLimiterEnabled(this, false)
+            Prefs.setUnifiedEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -189,7 +197,7 @@ class VolumeCapService : Service() {
         // up to LIMITER_POLL_INTERVAL_MS for the next poll tick — disconnect in particular must
         // disable promptly, not lag behind, or "headphone safety" would keep limiting speaker
         // audio for up to 2 seconds after headphones come off.
-        if (Prefs.isLimiterEnabled(this)) {
+        if (Prefs.isUnifiedEnabled(this)) {
             refreshLimiter()
             LimiterStatus.activeSessionCount = limiterManager.activeSessionCount
         }
@@ -201,7 +209,7 @@ class VolumeCapService : Service() {
      * than trusting the call.
      */
     private fun enforceCap() {
-        val headroomPercent = Prefs.headroomPercent(this)
+        val headroomPercent = Prefs.unifiedHeadroomPercent(this)
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val min = audioManager.getStreamMinVolume(AudioManager.STREAM_MUSIC)
         val cap = (max * (100 - headroomPercent) / 100).coerceIn(min, max)
@@ -249,7 +257,7 @@ class VolumeCapService : Service() {
 
     private fun statusText(): String {
         val capPart = if (headphoneActive) getString(R.string.status_capping) else getString(R.string.status_no_headphones)
-        if (!Prefs.isLimiterEnabled(this)) return capPart
+        if (!Prefs.isUnifiedEnabled(this)) return capPart
         val limiterPart = when {
             !limiterManager.hasDumpPermission() -> getString(R.string.status_limiter_no_dump)
             !limiterManager.deviceSupportsEffect -> getString(R.string.status_limiter_unsupported)

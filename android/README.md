@@ -61,8 +61,11 @@ and app-dependent**, not universal:
   threshold is **hard-pinned to -2 dB by the vendor's own DSP implementation**, regardless of the
   headroom preset selected in the app — tested requesting -10, 0, and -20 dB on the S9+, all three
   read back as -2.0 dB; the same clamp was independently re-confirmed on the S21. This means the
-  limiter genuinely limits (a real ceiling against clipping-level transients exists), but the
-  headroom preset picker doesn't currently change that ceiling on either Samsung device tested.
+  effect stays genuinely live in the audio graph at that fixed threshold (confirmed via a
+  `dumpsys media.audio_flinger` effect-chain diff, not just a successful API call — see below), but
+  the headroom preset picker doesn't currently change that ceiling on either Samsung device tested,
+  and its actual acoustic attenuation at -2 dB hasn't been independently measured (activation is
+  confirmed, magnitude is not).
   This is now confirmed **Samsung/One UI-wide** (two different chip/Android-version generations),
   not a one-device fluke — but still unconfirmed for non-Samsung OEMs (Pixel/AOSP, Xiaomi, etc.),
   since no such device has been available to test against.
