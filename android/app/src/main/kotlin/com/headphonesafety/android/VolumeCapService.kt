@@ -89,15 +89,23 @@ class VolumeCapService : Service() {
     private val limiterPollRunnable = object : Runnable {
         override fun run() {
             LimiterStatus.dumpGranted = limiterManager.hasDumpPermission()
-            if (Prefs.isLimiterEnabled(this@VolumeCapService)) {
-                limiterManager.refresh(Prefs.limiterHeadroomDb(this@VolumeCapService))
-            } else {
-                limiterManager.releaseAll()
+            when {
+                !Prefs.isLimiterEnabled(this@VolumeCapService) -> limiterManager.releaseAll()
+                // No reason to fork `dumpsys` and re-discover sessions while nothing would be
+                // enabled anyway — real battery win on top of the per-session setEnabled sync,
+                // since the poll would otherwise keep running (and finding sessions to silently
+                // leave disabled) the whole time the phone plays through the speaker.
+                !headphoneActive -> { /* leave already-attached sessions as-is, just disabled */ }
+                else -> refreshLimiter()
             }
             LimiterStatus.activeSessionCount = limiterManager.activeSessionCount
             updateNotification()
             pollHandler.postDelayed(this, LIMITER_POLL_INTERVAL_MS)
         }
+    }
+
+    private fun refreshLimiter() {
+        limiterManager.refresh(Prefs.limiterHeadroomDb(this), headphoneActive)
     }
 
     override fun onCreate() {
@@ -138,6 +146,14 @@ class VolumeCapService : Service() {
         headphoneActive = outputs.any { it.type in HEADPHONE_TYPES }
         updateNotification()
         if (headphoneActive && enforceIfActive) enforceCap()
+        // Sync the limiter's enabled state immediately on any route change rather than waiting
+        // up to LIMITER_POLL_INTERVAL_MS for the next poll tick — disconnect in particular must
+        // disable promptly, not lag behind, or "headphone safety" would keep limiting speaker
+        // audio for up to 2 seconds after headphones come off.
+        if (Prefs.isLimiterEnabled(this)) {
+            refreshLimiter()
+            LimiterStatus.activeSessionCount = limiterManager.activeSessionCount
+        }
     }
 
     /**

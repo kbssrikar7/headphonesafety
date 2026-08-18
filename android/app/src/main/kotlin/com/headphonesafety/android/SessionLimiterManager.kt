@@ -52,8 +52,18 @@ class SessionLimiterManager(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.DUMP) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** Re-scans active audio sessions and brings the attached-effects set in line with them. */
-    fun refresh(headroomDb: Int) {
+    /**
+     * Re-scans active audio sessions and brings the attached-effects set in line with them.
+     *
+     * `headphoneActive` gates whether attached sessions are actually enabled — a real bug fixed
+     * here: this used to always enable every attached session regardless of output route, meaning
+     * the limiter would apply to speaker playback too, contradicting the whole "headphone safety"
+     * framing. Deliberately does NOT route "no headphones" through `releaseAll()` — that would
+     * mean re-discovering and re-attaching every session from scratch on every headphone
+     * connect/disconnect, which is wasteful churn. Sessions stay attached; only their enabled
+     * state toggles with the route, via `DynamicsProcessing.setEnabled`, which is cheap.
+     */
+    fun refresh(headroomDb: Int, headphoneActive: Boolean) {
         LimiterStatus.deviceSupportsLimiter = deviceSupportsEffect
         if (!hasDumpPermission() || !deviceSupportsEffect) {
             releaseAll()
@@ -70,10 +80,17 @@ class SessionLimiterManager(private val context: Context) {
         for (id in sessions) {
             val existing = attached[id]
             if (existing == null) {
-                attach(id, headroomDb)
+                attach(id, headroomDb, headphoneActive)
             } else {
                 updateThreshold(existing, headroomDb)
             }
+        }
+
+        for ((id, dp) in attached) {
+            runCatching {
+                dp.setEnabled(headphoneActive)
+                Log.d(TAG, "session $id setEnabled($headphoneActive) readback=${dp.getEnabled()}")
+            }.onFailure { Log.e(TAG, "setEnabled sync failed for session $id", it) }
         }
     }
 
@@ -94,7 +111,7 @@ class SessionLimiterManager(private val context: Context) {
      * the pre/mbc/postEq stages are then explicitly disabled per-channel afterward so only the
      * limiter actually processes anything, and the limiter is configured with our headroom.
      */
-    private fun attach(sessionId: Int, headroomDb: Int) {
+    private fun attach(sessionId: Int, headroomDb: Int, headphoneActive: Boolean) {
         runCatching {
             Log.d(TAG, "attaching limiter to session $sessionId at ${-headroomDb}dB")
             val dp = DynamicsProcessing(0, sessionId, null)
@@ -111,7 +128,10 @@ class SessionLimiterManager(private val context: Context) {
                 limiter.setPostGain(0.0f)
                 limiter.setEnabled(true)
             }
-            dp.setEnabled(true)
+            // Starts disabled unless headphones are already active — otherwise a session
+            // discovered while on speaker would briefly limit before refresh()'s sync loop
+            // (which runs after this returns) catches up.
+            dp.setEnabled(headphoneActive)
             attached[sessionId] = dp
             val readBack = dp.getLimiterByChannelIndex(0)?.threshold
             Log.d(TAG, "attached OK to session $sessionId ($channelCount ch), enabled=${dp.getEnabled()}, threshold readback=$readBack")
