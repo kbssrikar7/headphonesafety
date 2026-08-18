@@ -1,0 +1,45 @@
+<resources>
+    <string name="app_name">Headphone Safety</string>
+    <string name="enable_volume_cap">Enable Volume Cap</string>
+    <string name="headroom_label">Headroom (approximate — Android has no native dB scale for stream volume)</string>
+    <string name="headroom_0">0%</string>
+    <string name="headroom_5">5%</string>
+    <string name="headroom_10">10%</string>
+    <string name="headroom_15">15%</string>
+    <string name="headroom_20">20%</string>
+    <string name="status_disabled">Volume Cap is off.</string>
+    <string name="status_running">Volume Cap is on (%1$d%% headroom) — active only while headphones or Bluetooth audio are connected.</string>
+    <string name="status_capping">Headphone Safety — capping volume</string>
+    <string name="status_no_headphones">Headphone Safety — no headphones connected</string>
+    <string name="stop_action">Turn off</string>
+
+    <string name="enable_limiter">Enable Real-Time Limiter (experimental)</string>
+    <string name="limiter_headroom_label">Limiter ceiling (true dB — real peak limiting, not an approximation)</string>
+    <string name="limiter_db_0">0 dB</string>
+    <string name="limiter_db_5">5 dB</string>
+    <string name="limiter_db_10">10 dB</string>
+    <string name="limiter_db_15">15 dB</string>
+    <string name="limiter_db_20">20 dB</string>
+    <string name="limiter_status_no_dump">Real-Time Limiter needs one-time setup from a computer: run\nadb shell pm grant %1$s android.permission.DUMP\nCoverage is partial even after that — see android/README.md.</string>
+    <string name="limiter_status_active">Real-Time Limiter: protecting %1$d active audio session(s). Coverage is per-app, not universal.</string>
+    <string name="limiter_status_active_uncertain">Real-Time Limiter: protecting %1$d active audio session(s) (best-effort detection — this Android build\'s internal audio report format differs from what this app expects). Coverage is per-app, not universal.</string>
+    <string name="limiter_status_unsupported_device">Real-Time Limiter isn\'t available on this device — its audio system has no dynamics-processing effect for this app to use. This varies by phone maker/chipset.</string>
+    <string name="limiter_status_off">Real-Time Limiter is off.</string>
+    <string name="status_limiter_no_dump">| Limiter: DUMP not granted</string>
+    <string name="status_limiter_unsupported">| Limiter: unsupported on this device</string>
+    <string name="status_limiter_sessions">| Limiter: %1$d session(s)</string>
+    <string name="status_limiter_sessions_uncertain">| Limiter: %1$d session(s) (best-effort)</string>
+
+    <string name="battery_exempt">Battery optimization: exempt ✓ — the background service can keep running while the screen is off.</string>
+    <string name="battery_not_exempt">Battery optimization: NOT exempt — Android may kill the background service to save power, silently stopping protection. Recommended for a hearing-safety app.</string>
+    <string name="battery_settings_button">Exempt from battery optimization</string>
+    <string name="oem_battery_note_intro">Some phone makers have a SEPARATE battery/autostart manager beyond the button above — it only covers standard Android.</string>
+    <string name="oem_battery_note_samsung">Confirmed on Samsung: Settings → Device care → Battery → Background usage limits → Never sleeping apps → add Headphone Safety.</string>
+    <string name="oem_battery_note_xiaomi">On Xiaomi/MIUI (not verified on this build — from dontkillmyapp.com): Settings → Apps → Headphone Safety → App permissions → enable "Background autostart," then also check Security app → Battery → App Battery Saver → Headphone Safety → "No restrictions."</string>
+    <string name="oem_battery_note_huawei">On Huawei/EMUI (not verified on this build — from dontkillmyapp.com): Settings → Battery → App launch → Headphone Safety → set to "Manage manually" and enable all toggles; also Settings → Apps → Startup manager → allow Headphone Safety.</string>
+    <string name="oem_battery_note_oneplus">On OnePlus/OxygenOS (not verified on this build — from dontkillmyapp.com): Settings → Battery → Battery optimization → select "All apps" → Headphone Safety → "Don\'t optimize." OnePlus is known to periodically revert this setting on its own — worth rechecking occasionally.</string>
+    <string name="oem_battery_note_oppo">On Oppo/Realme/ColorOS (not verified on this build — from dontkillmyapp.com): Settings → App info → Headphone Safety → enable "Allow Auto Start-up" and set Battery usage to "Run in background."</string>
+    <string name="oem_battery_note_vivo">On Vivo/FuntouchOS (not verified on this build — from dontkillmyapp.com): Settings → More settings → Applications → Autostart → enable for Headphone Safety; also Settings → Battery → Battery Optimization → set to "Not optimized."</string>
+    <string name="oem_battery_note_generic">On other brands, look in Settings for a similarly-named "protected apps," "autostart manager," or "background usage" setting — see dontkillmyapp.com for a maker-by-maker guide.</string>
+    <string name="oem_battery_note_source">More detail for any phone maker: dontkillmyapp.com</string>
+</resources>

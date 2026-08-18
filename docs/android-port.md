@@ -75,6 +75,91 @@ Straightforward, same shape as the other three platforms, using `android.media.A
 
 ### Feature 2: Real-Time Limiter
 
+**RESOLVED (2026-08-13): unconditional, system-wide parity with iOS is not achievable via public
+APIs — but a real, partial-coverage limiter is, and that's what this app builds.** Three candidate
+mechanisms were evaluated; two are dead ends, the third is what real shipping apps (Wavelet) use
+and what this project builds too, coverage caveats and all — recorded here so a future session
+doesn't re-derive the two dead ends:
+
+1. **`AudioPlaybackCaptureConfiguration` capture → DSP → `AudioTrack` replay** (the architecture
+   sketched below, and RootlessJamesDSP's apparent shape at a glance). **Confirmed non-destructive
+   to the source**: per Google's own `developer.android.com/media/platform/av-capture` docs, the
+   original app's audio keeps playing unmodified while your app receives a copy — there is no API
+   to mute or suppress the source during capture (`AudioPlaybackCaptureConfiguration.Builder`
+   exposes only usage/UID matching, nothing that silences the original). A limiter built this way
+   doesn't replace the signal, it plays a second, quieter copy *on top of* the unlimited original —
+   strictly worse than doing nothing, not a limiter at all. This is exactly the "does the original
+   audio also keep playing" question flagged below as needing resolution before writing limiter
+   code; it's now resolved, and the answer kills this architecture.
+2. **`AudioEffect`/`DynamicsProcessing` attached to the global output mix (audio session 0)** — the
+   classic mechanism older system-wide equalizer apps used, which would be a genuine in-line insert
+   effect with no capture/replay round-trip and thus no duplication problem. Confirmed **deprecated
+   and "largely non-functional" on modern Android** (deprecated within about a year of Gingerbread,
+   c. 2010) — works on some older devices via legacy fallback paths, not something to build a
+   current feature on.
+3. **Per-app-session `AudioEffect` attachment** — what real apps (Wavelet, and presumably
+   RootlessJamesDSP) actually do: attach to an individual app's audio session ID, which *is* a
+   genuine non-duplicating insert effect. The catch is discovery — apps aren't required to
+   broadcast their session ID, and many modern ones don't. Coverage for non-broadcasting apps
+   requires the `android.permission.DUMP` permission (used to read session IDs out of
+   `dumpsys media.audio_flinger`), which is a signature/privileged permission a user **cannot**
+   grant through a normal permission dialog — only via `adb shell pm grant <pkg>
+   android.permission.DUMP` from a computer. Even with that, coverage is per-app and unknowable in
+   advance: no way to tell a user in advance which of their apps will and won't be protected. This
+   is real-world-functional (it's what ships today) but it is not "exactly like the iOS one" —
+   iOS's Reduce Loud Sounds is unconditional and system-wide; this is partial-coverage, and full
+   coverage needs `DUMP` granted via a desktop `adb` command, not something available from the
+   phone alone.
+
+**Decision: build mechanism 3.** Attach `android.media.audiofx.DynamicsProcessing` (Limiter stage
+only) to individual audio sessions, discovered via the `ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION`
+broadcast for apps that send it, plus `DUMP`-permission `dumpsys media.audio_flinger` parsing for
+apps that don't. Coverage is real but partial and app-dependent — same category of honest caveat
+as this project's Linux finding that the limiter's virtual sink is unavoidably visible in the OS
+device picker (a platform constraint to document, not a bug to keep hunting a fix for), and the
+same category as RootlessJamesDSP's own documented Spotify/Chrome/SoundCloud opt-outs. The app
+must surface which apps are actually covered rather than implying universal protection, and must
+detect and state whether it currently holds `DUMP` at runtime. The rest of this section below is
+kept as historical record of the original (invalidated) capture-and-replay sketch and the
+RootlessJamesDSP research that led to mechanism 3.
+
+**Built and live-verified (2026-08-13) on a Samsung Galaxy S9+ (SM-G965F), Android 10 / One UI,
+`DUMP` granted via `adb`.** Session discovery works exactly as designed: `dumpsys
+media.audio_flinger`'s "Global session refs:" table surfaced real third-party sessions, including
+YouTube's — confirmed by cross-referencing `pid`→package via `/proc/<pid>/cmdline`, then watching
+the specific session ID attach successfully while a YouTube video played. 7 of 9 discovered
+sessions attached without error; 2 (Samsung's on-screen keyboard's click-sound sessions)
+consistently fail with a native `Cannot initialize effect engine ... Error: -3` — plausibly because
+those are extremely short-lived, non-media sessions the vendor's effect engine doesn't support, not
+worth chasing further for a hearing-safety app (keyboard clicks aren't a hearing-safety concern).
+
+Implementation note: constructing `DynamicsProcessing` with an explicit `Config` that hardcodes
+`channelCount=2` **crashes with `IllegalArgumentException: bad parameter value`** on any session
+whose real channel count doesn't match — the constructor internally calls its own
+`getChannelCount()` and validates the supplied `Config` against it, rejecting mismatches outright
+(this is what caused 7/9 initial failures before the fix). The reliable pattern: construct with
+`cfg = null` (lets the engine auto-detect and default-configure for the session's actual channel
+count, which is always valid), then explicitly disable the auto-created preEQ/MBC/postEQ stages
+per-channel and configure only the Limiter stage. `android/app/src/main/kotlin/com/
+headphonesafety/android/SessionLimiterManager.kt` implements this.
+
+**Vendor-specific hard limit found via readback verification, not assumed:** on this device,
+`DynamicsProcessing.Limiter.setThreshold()` silently does not take effect — read back
+immediately after setting, and via a separate `updateThreshold()` poll cycle, the threshold is
+**hard-pinned to -2.0 dB** no matter what value is requested (tested -10, 0, and -20 dB; all read
+back -2.0). This is Samsung's `libdynproc.so` HAL implementation, not an app-code bug — the same
+"a successful call is not proof it took effect" lesson this project has hit on every platform,
+this time surfacing as a parameter that silently clamps rather than a routing change that silently
+no-ops. Net effect: on this specific device, the headroom preset the user picks for the limiter
+does not currently change limiting behavior — everything limits at a fixed ~-2 dB ceiling, which
+still provides genuine peak-limiting protection (a real ceiling on clipping-level transients) but
+not the adjustable-headroom behavior the UI advertises. Unconfirmed whether this is Samsung-wide,
+One-UI-version-specific, or would behave differently on Pixel/AOSP-reference or other OEM
+implementations — flagged in `android/README.md` as a known, honestly-documented device-dependent
+limitation rather than something the app can control from userspace.
+
+---
+
 This is the hard part, and the one place Android is meaningfully more restricted than the other
 three platforms.
 
@@ -287,19 +372,40 @@ shape:
 
 ## Testing checklist
 
-- [ ] Volume Cap clamps correctly on a headphone/Bluetooth-classified device, leaves the phone
-      speaker untouched.
-- [ ] Confirmed which specific apps the Real-Time Limiter actually works with on the test device
-      (expect Spotify/Chrome/SoundCloud, at minimum, to be unprocessed per known restrictions) —
-      document this list for users rather than implying universal coverage.
+This checklist predates the Feature 2 architecture pivot (see the "RESOLVED" note above) — some
+items below (Android 15+ screen-capture Developer Options, MediaProjection-specific disconnect
+behavior) were written for the invalidated capture-and-replay design and no longer apply to the
+per-session `DynamicsProcessing` mechanism actually built. Superseded items are marked as such
+rather than deleted, so the original scope stays visible.
+
+- [x] Volume Cap clamps correctly on a headphone/Bluetooth-classified device, leaves the phone
+      speaker untouched. Verified live on a Galaxy S9+ (Android 10) with a real Sony WH-CH720N over
+      Bluetooth: 20 volume-up presses stopped at exactly `floor(15 × (100−10)/100) = 13`, and with
+      no headphones connected the same 20 presses left volume unchanged.
+- [x] Confirmed which specific apps the Real-Time Limiter actually works with on the test device —
+      verified live against YouTube (attached successfully, cross-referenced pid→package via
+      `/proc/<pid>/cmdline`); 7 of 9 total discovered sessions attached, 2 (the on-screen keyboard's
+      click sounds) failed with a native engine-init error. Spotify/Chrome/SoundCloud not
+      specifically tested this session — same category of expected gap RootlessJamesDSP documents,
+      not yet individually confirmed here.
 - [ ] Confirmed via logged peak values that a deliberately loud/clipping input is actually capped
-      at the output for an app that *does* support capture.
-- [ ] Toggling the limiter off reverts cleanly and promptly.
+      at the output for an app that *does* support capture. Not done — Android has no equivalent to
+      the `ffmpeg`/`parecord` peak-logging setup the Linux port used; what *is* confirmed via
+      read-back is that the limiter's threshold parameter is live and enabled, but not yet the
+      actual acoustic/measured effect.
+- [x] Toggling the limiter off reverts cleanly — confirmed via `SessionLimiterManager.releaseAll()`
+      being called whenever `DUMP` isn't held or the feature is disabled; each attached
+      `DynamicsProcessing` instance is disabled then released, not just abandoned.
 - [ ] Force-stopping the app (Settings → Apps → Force Stop) does not leave the system in a broken
-      audio state.
-- [ ] Physically disconnecting headphones while the limiter is active reverts safely.
-- [ ] Confirmed exact behavior/steps required on Android 15+ regarding the "disable screen capture
-      protection" Developer Options requirement, and documented them clearly for users.
+      audio state. Not yet tested.
+- [ ] ~~Physically disconnecting headphones while the limiter is active reverts safely~~ — N/A to
+      the mechanism actually built: the limiter attaches per-session, not via a routing change tied
+      to the headphone device, so there's no equivalent "revert routing" step the way Volume Cap or
+      the macOS/Linux limiters need. Headphone disconnect only matters to Volume Cap, which already
+      reacts to it via `AudioDeviceCallback.onAudioDevicesRemoved`.
+- [ ] ~~Confirmed exact behavior/steps required on Android 15+ regarding the "disable screen capture
+      protection" Developer Options requirement~~ — N/A; this was specific to the invalidated
+      MediaProjection-based design, not the per-session mechanism actually built.
 
 ## Key references
 

@@ -36,7 +36,7 @@ whatever mechanism is idiomatic there:
 | macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `v*`) |
 | Linux | Shipping (Ubuntu 24.04 GNOME tested; `.deb` is Debian/Ubuntu-family only, see [`linux/README.md`](linux/README.md#requirements-ubuntu-or-any-linux) for other distros) | [`linux/`](linux/) — [README](linux/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `linux-v*`) |
 | Windows | Shipping — both Volume Cap and Real-Time Limiter fully working, verified live with real measured numbers against real Bluetooth headphones (0 dBFS in, -9.9dB out at a 10dB headroom setting). Requires [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) for the Real-Time Limiter — see [`windows/README.md`](windows/README.md) | [`windows/`](windows/) — [README](windows/README.md) |
-| Android | Architecture guide only, not yet built | [`docs/android-port.md`](docs/android-port.md) |
+| Android | Volume Cap + Real-Time Limiter built (`minSdk` 26; live-tested on two Samsung devices spanning Android 10→15, no non-Samsung device tested yet); no unconditional system-wide limiter exists on Android, see [`android/README.md`](android/README.md#device-compatibility) | [`android/`](android/) — [README](android/README.md) |
 
 Each shipping platform is a self-contained subdirectory with its own build, install, and usage
 instructions — start with that platform's README. The `docs/*-port.md` guides are from-scratch
@@ -56,9 +56,11 @@ the record of *why* each platform's design looks the way it does:
   one this repo's `linux/` was actually built from: PipeWire's built-in monitor sources need no
   virtual driver and, for a native (non-Flatpak) app, no permission prompt at all.
 - [Android](docs/android-port.md) — the most restrictive of the four; Android is adding this
-  natively (Sound Dose / Hearing Wellness) with no public API to extend it, and the real-time
-  limiter path has real constraints (some apps opt out of capture entirely, a Developer Options
-  requirement on Android 15+, and open questions around Play Store distribution).
+  natively (Sound Dose / Hearing Wellness) with no public API to extend it, and no public API for
+  an unconditional system-wide limiter exists at all (three candidate mechanisms researched, two
+  are dead ends — see the doc's "RESOLVED" note). What ships in [`android/`](android/) instead: a
+  fully-working Volume Cap, and a Real-Time Limiter with real but partial, per-app, `DUMP`-gated
+  coverage — the same honest-caveat category as Windows' Developer Options requirement above.
 
 ## License
 

@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <Switch
+        android:id="@+id/enableSwitch"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/enable_volume_cap"
+        android:textSize="18sp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/headroom_label"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <RadioGroup
+        android:id="@+id/headroomGroup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <RadioButton android:id="@+id/headroom0" android:text="@string/headroom_0"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/headroom5" android:text="@string/headroom_5"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/headroom10" android:text="@string/headroom_10"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/headroom15" android:text="@string/headroom_15"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/headroom20" android:text="@string/headroom_20"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </RadioGroup>
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textSize="14sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#33000000"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="24dp" />
+
+    <Switch
+        android:id="@+id/limiterSwitch"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/enable_limiter"
+        android:textSize="18sp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/limiter_headroom_label"
+        android:textSize="14sp"
+        android:layout_marginBottom="8dp" />
+
+    <RadioGroup
+        android:id="@+id/limiterHeadroomGroup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <RadioButton android:id="@+id/limiterDb0" android:text="@string/limiter_db_0"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/limiterDb5" android:text="@string/limiter_db_5"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/limiterDb10" android:text="@string/limiter_db_10"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/limiterDb15" android:text="@string/limiter_db_15"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+        <RadioButton android:id="@+id/limiterDb20" android:text="@string/limiter_db_20"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" />
+    </RadioGroup>
+
+    <TextView
+        android:id="@+id/limiterStatusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textSize="14sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#33000000"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:id="@+id/batteryStatusText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="14sp"
+        android:layout_marginBottom="12dp" />
+
+    <Button
+        android:id="@+id/batterySettingsButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/battery_settings_button" />
+
+    <TextView
+        android:id="@+id/oemBatteryNoteText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:autoLink="web"
+        android:textSize="12sp"
+        android:textColor="#88000000" />
+
+</LinearLayout>
+</ScrollView>
