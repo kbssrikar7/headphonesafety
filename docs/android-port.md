@@ -225,6 +225,34 @@ testing (each arm modified and rebuilt `SessionLimiterManager.attach()` in place
 then restored to the clean committed baseline) rather than left in the shipped path, since none of
 the three worked.
 
+**Unified toggle (2026-08-18): the two-switch UI was retired once the clamp finding made it
+misleading.** With no adjustable `DynamicsProcessing` parameter confirmed to exist on any tested
+device, a separate "Limiter headroom" dB picker that visibly did nothing was worse than no control
+at all. Volume Cap and the Real-Time Limiter now share a single "Enable Headphone Safety" toggle
+and one headroom percentage (`Prefs.unifiedEnabled`/`unifiedHeadroomPercent`) — Volume Cap uses the
+percentage directly; the Limiter attaches automatically whenever the toggle is on, at its fixed,
+device-determined ceiling, unaffected by the percentage. `Prefs.migrateIfNeeded()` is a
+schema-versioned, idempotent migration called from `MainActivity`, `VolumeCapService`, and
+`BootReceiver`: `unified_enabled = wasCapEnabled || wasLimiterEnabled` (never silently drops
+protection), `unified_headroom_percent` is seeded from the legacy `headroom_percent` key **alone**
+— not `max(headroom_percent, limiter_headroom_db)` as the original plan sketched, since the
+limiter value is confirmed inert and folding a dead number into `max()` could silently overwrite a
+user's real, working Volume Cap percentage with a number that never did anything. Legacy keys are
+left in place, unused, for rollback safety.
+
+Verified two ways on the S9+: **upgrade-in-place** (installed the pre-unification build, set real
+legacy prefs via its old two-switch UI — `headroom_percent=15, volume_cap_enabled=false,
+limiter_enabled=true` — then installed the migrated build over it and confirmed
+`unified_enabled=true, unified_headroom_percent=15` exactly as designed, UI included), and a **real
+device reboot** (with the user's advance consent) confirming `BootReceiver` resumes the service
+using the migrated key with zero manual app launch. The reboot test surfaced a real platform
+behavior worth recording: the foreground service did not reappear immediately after boot —
+`BOOT_COMPLETED` for this non-direct-boot-aware app was held back until the *first post-reboot
+unlock*, not delivered at boot time itself, on this file-based-encrypted device. `adb shell` cannot
+simulate `BOOT_COMPLETED` at all (`Security exception: Permission Denial`), so this could only be
+confirmed via an actual reboot — a good example of why this project's live-device-testing
+discipline keeps finding things a code read wouldn't.
+
 ---
 
 This is the hard part, and the one place Android is meaningfully more restricted than the other

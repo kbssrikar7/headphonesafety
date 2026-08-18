@@ -24,6 +24,19 @@ version/hardware-generation gap rather than an emulator, once cross-device compa
 goal. Both are Samsung; see [Device compatibility](#device-compatibility) below for what that does
 and doesn't tell us about other manufacturers.
 
+**One unified "Headphone Safety" toggle, not two independent features.** Earlier builds exposed
+Volume Cap and the Real-Time Limiter as separate switches with separate headroom pickers. Once it
+was confirmed (see the Limiter section below) that the Limiter's headroom picker has no measurable
+effect on any device tested — its ceiling is fixed by the vendor DSP regardless of what's
+selected — keeping a second, inert dB control in the UI would have been actively misleading. A
+single switch and headroom percentage now drive both mechanisms together: Volume Cap is the real,
+adjustable protection; the Limiter attaches automatically as a fixed-ceiling backstop against
+clipping-level transients whenever the toggle is on, and its own coverage (per-app, needs `DUMP`)
+is reported in a separate status line since that's genuinely different information from the cap's
+state, even though there's no separate control for it anymore. The two underlying mechanisms below
+are still described separately because their technical detail is still accurate and still matters
+for understanding what the app actually does — only the UI and preference storage are unified.
+
 **Volume Cap: built and fully live-verified.** A foreground service caps `STREAM_MUSIC` volume
 whenever a headphone- or Bluetooth-classed audio device is present
 (`AudioManager.registerAudioDeviceCallback`), leaving the phone speaker untouched. Both halves
@@ -115,13 +128,15 @@ to actually keep protecting hearing while backgrounded, not just while the app i
   `am force-stop`, confirmed the service was gone (`dumpsys activity services` showed nothing),
   relaunched the activity, and confirmed the service auto-started with no manual toggle needed.
 - **Reboot auto-resume**, via a `BOOT_COMPLETED` broadcast receiver (`BootReceiver.kt`) that
-  restarts the service if either feature was enabled. Confirmed *registered* correctly (`dumpsys
-  package` shows the receiver with the right intent filter) — **not yet confirmed by an actual
-  reboot**: `BOOT_COMPLETED` is a protected broadcast `adb shell` isn't allowed to simulate on this
-  device, and the code wasn't run through a real reboot this session (a phone reboot wasn't
-  something to do without asking first). The receiver's logic mirrors the already-verified
-  cold-launch path, but "the same code that's proven to work elsewhere" is not the same claim as
-  "proven to work here" — flagged honestly rather than assumed.
+  restarts the service if Headphone Safety was enabled. **Confirmed via a real reboot** (with the
+  user's advance consent, per this project's standing rule about not rebooting their phone
+  unsupervised): the S9+ was rebooted with the unified toggle on, and the foreground service came
+  back with no manual app launch at all. One real platform behavior this surfaced live, not
+  knowable from `adb shell`'s protected-broadcast restriction alone: the service didn't reappear
+  immediately after boot — `dumpsys activity services` showed nothing until *after* the first
+  unlock, confirming that `BOOT_COMPLETED` for a non-direct-boot-aware app like this one is held
+  back until the user unlocks the device once on this file-based-encrypted device, not delivered
+  at boot time itself.
 
 ### Background survival: deeper platform research
 
@@ -282,18 +297,18 @@ command is run.
 
 ## Usage
 
-1. Install the app and launch it — a single screen with two independent feature toggles, mirroring
-   the other platforms' menu structure.
-2. **Enable Volume Cap**, pick a headroom percentage (an approximation — Android's stream-volume
-   API is index-based, not decibel-based, unlike the other three platforms; see
-   [`docs/android-port.md`](../docs/android-port.md) for why).
-3. **Enable Real-Time Limiter** (experimental), pick a headroom preset. Run the `adb shell pm
-   grant` command above first, or the status text will tell you it's protecting nothing. **On
-   Samsung/One UI devices tested, this preset currently has no effect** — the vendor DSP
-   hard-pins the actual ceiling to ~-2 dB regardless of what's picked here (see above); still worth
-   enabling for the fixed peak-limiting protection it does provide, just don't expect the number
-   picked to change anything on this hardware.
-4. Both features run from a single foreground service (visible as a persistent notification, same
+1. Install the app and launch it — a single screen with one **Enable Headphone Safety** toggle and
+   one headroom picker, mirroring the other platforms' menu structure.
+2. Pick a headroom percentage (an approximation — Android's stream-volume API is index-based, not
+   decibel-based, unlike the other three platforms; see
+   [`docs/android-port.md`](../docs/android-port.md) for why). This value drives Volume Cap
+   directly; it does not change the Real-Time Limiter's ceiling, which is fixed by the device (see
+   above) — the Limiter attaches automatically whenever the toggle is on, at whatever ceiling the
+   hardware enforces.
+3. For the Limiter's actual (non-zero) per-app coverage, run the `adb shell pm grant` command above
+   first — otherwise its status line will say `DUMP not granted` and it protects nothing, while
+   Volume Cap keeps working regardless.
+4. Both mechanisms run from a single foreground service (visible as a persistent notification, same
    reason every other platform in this repo needs a persistent background component) and react
    automatically to headphone/Bluetooth connects and disconnects.
 5. If the screen shows "Battery optimization: NOT exempt," tap the button below it — recommended so
@@ -335,9 +350,17 @@ command is run.
 - [x] Force-stopping the app (`am force-stop`) and cold-relaunching auto-resumes the service with
       no manual toggle needed — verified live (service confirmed absent via `dumpsys activity
       services` after force-stop, confirmed `isForeground=true` again immediately after relaunch).
-- [ ] Reboot auto-resume (`BootReceiver`) — confirmed *registered* correctly, not yet confirmed via
-      an actual device reboot (not done without asking first; `adb shell` can't simulate the
-      protected `BOOT_COMPLETED` broadcast on this device to test it another way).
+- [x] Reboot auto-resume (`BootReceiver`) confirmed via a real device reboot (with the user's
+      advance consent): the foreground service came back with no manual app launch, using the
+      migrated unified-toggle prefs. Surfaced live that `BOOT_COMPLETED` for this non-direct-boot-
+      aware app is held until the first post-reboot unlock on this file-based-encrypted device, not
+      delivered at boot time itself.
+- [x] Unified-toggle Prefs migration verified via upgrade-in-place: installed the pre-migration
+      build's real prefs (`headroom_percent=15, volume_cap_enabled=false, limiter_enabled=true`),
+      installed the migrated build over it, confirmed `unified_enabled=true,
+      unified_headroom_percent=15` exactly as designed (seeded from `headroom_percent` alone, not
+      a `max()` with the confirmed-inert limiter headroom — see `docs/android-port.md`), and that
+      the UI reflected it correctly on next launch.
 - [ ] Battery-optimization exemption's actual effect on service survival over real idle/Doze time —
       the detection UI and settings-screen handoff are verified working; whether exemption
       measurably changes survival time hasn't been tested (would need a long unattended idle
