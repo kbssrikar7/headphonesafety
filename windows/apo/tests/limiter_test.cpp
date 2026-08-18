@@ -1,7 +1,7 @@
 // Standalone offline test for the Limiter DSP. No COM, no audio engine, no elevated or
 // system-level action needed - pure math, run directly after building:
 //   windows\build\apo\tests\limiter_test.exe
-#include "../Limiter.h"
+#include "Limiter.h"
 
 #include <cmath>
 #include <cstdio>

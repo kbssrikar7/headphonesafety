@@ -18,9 +18,13 @@ add_executable(HeadphoneSafetyTray WIN32
     TimeoutRunner.cpp
     DeviceWatcher.cpp
     TrayIcon.cpp
+    DefaultDeviceSwitcher.cpp
+    VBCableDetector.cpp
+    LimiterEngine.cpp
+    LimiterStatus.cpp
 )
 
-target_link_libraries(HeadphoneSafetyTray PRIVATE hps_shared ole32 shell32)
+target_link_libraries(HeadphoneSafetyTray PRIVATE hps_shared hps_dsp ole32 shell32 avrt)
 target_compile_definitions(HeadphoneSafetyTray PRIVATE UNICODE _UNICODE)
 
 add_subdirectory(tests)

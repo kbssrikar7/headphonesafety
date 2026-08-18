@@ -40,26 +40,35 @@ A lightweight safety ceiling on your headphone output volume.
 
 ### Real-Time Limiter
 
-The actual signal-level protection, equivalent to iOS's Reduce Loud Sounds.
+The actual signal-level protection, equivalent to iOS's Reduce Loud Sounds. **Confirmed working
+with real measured numbers, not just a checkbox** — see the verification note below.
 
-- Inserts a true peak-limiting [Windows Audio Processing Object (APO)](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/windows-audio-processing-objects)
-  directly into your audio driver's own signal chain — the same mechanism Dolby/DTS/Realtek use
-  for their own built-in effects. Because it runs inside the device's own pipeline rather than as
-  a separate capture process, it never touches any microphone/audio-capture permission surface —
-  **no permission prompt of any kind**, unlike the macOS build (which needs Microphone + Screen
-  Recording access) or a WASAPI-loopback-based approach.
-- **Known limitation, please read before relying on this**: it's confirmed correctly built and
-  registered (verified via direct COM instantiation and registry readback surviving a full
-  reboot), but on the primary development machine, Windows' audio engine never actually loads it
-  — confirmed via live ETW tracing showing the APO is never even attempted for discovery, after
-  trying every fix short of kernel debugging (service restart, process kill, full reboot, PnP
-  re-enumeration). **Tested on two structurally unrelated driver stacks on this same machine**
-  (Conexant HD Audio built-in speakers, and Sony WH-CH720N Bluetooth A2DP headphones) with the
-  identical result both times — the isolated Bluetooth test measured byte-for-byte identical
-  output with the limiter enabled vs. disabled. This weakens "one vendor's driver is the problem"
-  as an explanation; it may be specific to this Windows 10 22H2 build rather than any particular
-  driver. See [`docs/windows-port.md`](../docs/windows-port.md)'s "Known blocker" section for the
-  full investigation. **Try it on your own machine — it may just work.**
+- Routes your audio through [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (a free,
+  widely-used virtual audio driver), captures it via WASAPI loopback, runs it through a
+  non-lookahead envelope-follower limiter (fast attack, slower release — same DSP as the
+  [macOS](../macos/README.md) and [Linux](../linux/README.md) builds), and renders the limited
+  signal to your real output device — the same architecture those two ports already use in
+  production, adapted for WASAPI instead of CoreAudio/PipeWire.
+- **Verified live against real Bluetooth headphones** (Sony WH-CH720N): with a 10dB headroom
+  setting, a full-scale (0 dBFS) test tone measured at -0.1dB before the limiter and **-9.9dB
+  after it**, matching the configured ceiling to within 0.1dB and holding rock-steady. Not a
+  simulated or unit-test result — a live WASAPI loopback capture of the actual rendered output.
+- An earlier approach (inserting a [Windows Audio Processing Object](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/windows-audio-processing-objects)
+  directly into the driver chain, avoiding any virtual device) was fully built and correctly
+  registered but never actually got loaded by Windows' audio engine on the development machine,
+  across two different driver stacks. That code is kept in [`apo/`](apo/) as a documented,
+  parked reference — see [`docs/windows-port.md`](../docs/windows-port.md)'s "Known blocker"
+  section — in case it works on different hardware, but it is not what ships or is installed by
+  default today.
+- No microphone/screen-recording permission prompt was observed during testing — WASAPI loopback
+  capture from an unpackaged Win32 desktop app is not gated by Windows' microphone privacy toggle
+  the way a UWP/MSIX app's capture would be. Unlike the macOS build (which needs Microphone +
+  Screen Recording access to do the equivalent).
+- Automatically detects and refuses to "protect" a Bluetooth device's low-quality Hands-Free
+  (call/voice) endpoint if that happens to be the current default instead of its normal A2DP
+  (music) endpoint — Windows exposes these as two separate devices for the same physical
+  headphones, and can silently switch between them. The tray's context menu tells you why it's
+  not running rather than silently limiting the wrong channel.
 
 ## How it works
 
@@ -69,53 +78,69 @@ The actual signal-level protection, equivalent to iOS's Reduce Loud Sounds.
 thread with a timeout, so a call that hangs against a device that's mid-disconnect can never
 freeze the app.
 
-**Real-Time Limiter** is a Windows Audio Processing Object — an in-process COM DLL registered
-directly into a specific output device's driver-level effects chain (the `SFX`/`MFX` "stream
-effect"/"mode effect" slots, paired with the endpoint's supported processing modes — see
-[`register-apo.ps1`](apo/register/register-apo.ps1) for the exact mechanism). When enabled, its
-`APOProcess` callback runs a non-lookahead envelope-follower limiter (fast attack, slower
-release) directly on the audio buffer, on the real-time audio thread inside `audiodg.exe`, with
-no rerouting of your default output device at all — unlike the macOS/Linux ports, which switch
-the OS default output to a virtual device. A tray-to-APO shared-memory mapping lets the tray's
-enabled/headroom settings reach the APO instance without either process needing to know about
-the other beyond that one named mapping.
+**Real-Time Limiter** switches your default output device to VB-Cable, opens a WASAPI loopback
+capture on it, runs each captured buffer through the limiter DSP, and renders the result to your
+real output device — all on one dedicated thread (`LimiterEngine`), using MMCSS ("Pro Audio")
+scheduling priority for glitch resistance:
 
 ```
-Real output device's own driver pipeline
-  -> HeadphoneSafetyApo.dll (SFX/MFX slot, in-process)
-    -> envelope-follower limiter, reading enabled/headroom from shared memory
+Apps -> OS default output (switched to VB-Cable while limiting is active)
+  -> LimiterEngine: WASAPI loopback capture (VB-Cable)
+    -> envelope-follower limiter (same DSP as macOS/Linux)
+    -> resample/remix if the real device's native format differs from VB-Cable's
+    -> WASAPI render (your real device)
   -> hardware
 ```
 
+If your real output device's native audio format differs from VB-Cable's (common with Bluetooth
+headphones, which often run at 44100 Hz rather than the system's usual 48000 Hz), `LimiterEngine`
+automatically falls back to the device's own native format and resamples/remixes on the fly —
+confirmed live against real Bluetooth hardware, not just wired devices matching VB-Cable's format
+by coincidence.
+
 ### Reliability guarantees
 
-- Toggling the limiter off flips a shared-memory flag read by the real-time thread — `APOProcess`
-  becomes a plain `memcpy` pass-through immediately, no stream restart, no rerouting to revert.
-- Force-killing the tray process does not affect the limiter at all — it runs inside `audiodg.exe`,
-  entirely independent of the tray's own process lifetime, a structural safety advantage over the
-  macOS/Linux ports (whose limiters do depend on their controlling process staying alive to revert
-  a rerouted default device).
+- Toggling the limiter off (or the tray detecting a problem — a device change, a Bluetooth
+  profile switch, an engine failure) reverts the OS default output back to your real device
+  first, verified via readback, before tearing down the capture/render pipeline — mirrors the
+  same order-of-operations lesson already learned on the macOS build.
+- **Force-killing the tray process temporarily leaves the OS default output on VB-Cable** until
+  the next launch's startup recovery check runs (which happens unconditionally, every launch) —
+  this is a real trade-off of this architecture, shared with the macOS/Linux ports' virtual-device
+  approach, and different from the parked APO approach's structural independence from the tray
+  process. Quitting normally (tray icon → Quit) always reverts cleanly first.
 - Volume Cap's poll loop runs each tick through a timeout wrapper (2 seconds) on a dedicated
   worker thread — a call that hangs against a mid-disconnect device is abandoned rather than
   allowed to freeze the tray's UI thread and message loop.
 - A `DeviceWatcher` (`IMMNotificationClient`) reacts to device state/default-device changes by
-  triggering an immediate re-poll — verified live by disabling and re-enabling the test machine's
-  audio device while the tray was running, confirming both the callback firing and the process
-  staying responsive throughout.
+  triggering an immediate re-poll — verified live by disabling/re-enabling and by physically
+  disconnecting/reconnecting a real Bluetooth headset while the tray was running, confirming both
+  the callback firing and the process staying responsive throughout.
 - No component of the rollback path queries the specific device a change notification reports —
   only `GetDefaultAudioEndpoint`, re-resolved fresh, which is what's actually being polled.
+- The FIFO between capture and render never drops audio for a transient buffer-size mismatch (an
+  earlier version of this code did, and it was audible — see `LimiterEngine.cpp`'s comments for
+  the live measurement that caught it).
 
 ## Requirements
 
 - Windows 10 or 11 (developed and tested against Windows 10 Pro 22H2, build 19045)
+- [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) — free, required for the Real-Time
+  Limiter (not for Volume Cap). No documented silent-install switch; it's a small GUI installer
+  you run once yourself, same one-time-setup spirit as the macOS build's BlackHole install via
+  Homebrew.
 - To build from source: [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-  with the "Desktop development with C++" workload (includes CMake + Ninja), and the
-  [Windows Driver Kit](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
-  matching your Windows SDK version
+  with the "Desktop development with C++" workload (includes CMake + Ninja)
 
 ## Installation
 
-### Build from source
+### 1. Install VB-Audio Virtual Cable
+
+Download and run the installer from [vb-audio.com/Cable](https://vb-audio.com/Cable/) (accept
+its own driver-signing prompt if shown). Only needed for the Real-Time Limiter — Volume Cap works
+without it.
+
+### 2. Build from source
 
 ```
 git clone https://github.com/kbssrikar7/headphonesafety.git
@@ -123,49 +148,37 @@ cd headphonesafety
 .\windows\build.ps1
 ```
 
-This produces `windows\build\tray\HeadphoneSafetyTray.exe` and
-`windows\build\apo\HeadphoneSafetyApo.dll`.
+This produces `windows\build\tray\HeadphoneSafetyTray.exe` (the shipped app).
 
-### Install
-
-From an **elevated** PowerShell (installing the Real-Time Limiter APO requires admin rights —
-see the note below on exactly what that involves):
+### 3. Install
 
 ```
 .\windows\packaging\install.ps1
 ```
 
-This copies the built binaries to `%LOCALAPPDATA%\HeadphoneSafety`, registers the Real-Time
-Limiter against every headphone-like output device currently connected, sets up the tray to
-start automatically at login (via Task Scheduler), and starts it immediately.
-
-**What elevation actually does here, so there are no surprises**: registering the APO requires
-setting `DisableProtectedAudioDG` (a Windows setting that permits loading an unsigned APO — the
-same mechanism [Equalizer APO](https://sourceforge.net/projects/equalizerapo/) uses, and the
-reason this project's APO doesn't need a paid code-signing certificate) and taking ownership of
-one specific, normally `TrustedInstaller`-owned registry key per device (the standard
-`SeTakeOwnershipPrivilege` technique — the registry equivalent of `takeown.exe` + `icacls` for
-the filesystem, not any kind of security bypass). Windows SmartScreen may show an "unknown
+Copies the built tray binary to `%LOCALAPPDATA%\HeadphoneSafety`, sets up autostart at login
+(via Task Scheduler), and starts it immediately. Does **not** require elevation — the Real-Time
+Limiter's architecture (VB-Cable + WASAPI, not a driver-level APO) has no
+`TrustedInstaller`-owned registry keys to touch. Windows SmartScreen may still show an "unknown
 publisher" warning the first time you run `install.ps1` if downloaded from the internet, since
-this project is not code-signed — this is the same experience the macOS build's Gatekeeper
-warning and its documented right-click-to-open workaround already ask you to accept.
+this project is not code-signed — the same experience the macOS build's Gatekeeper warning and
+its documented right-click-to-open workaround already ask you to accept.
 
-A newly-paired Bluetooth headset after installation needs one more elevated registration pass —
-run `install.ps1` again (or `apo\register\register-apo.ps1 -EndpointGuid <guid>` directly, after
-finding the GUID via `-ListDevices`) once it's paired. This is a real, accepted limitation of the
-classic (non-UWP) APO registration model, not an oversight.
+If you'd rather try the parked APO approach instead (no virtual device, but not confirmed working
+on any test hardware so far — see [`docs/windows-port.md`](../docs/windows-port.md)), its
+registration scripts are still available under [`apo/register/`](apo/register/) and do require
+elevation; this is not what `install.ps1` sets up by default.
 
 ### Uninstall
-
-From an elevated PowerShell:
 
 ```
 .\windows\packaging\uninstall.ps1
 ```
 
-Stops the tray, removes the autostart task, unregisters the APO from every device it was
-attached to, and removes the installed binaries. Add `-RemoveSettings` to also clear your saved
-headroom/enabled preferences.
+Stops the tray, removes the autostart task, and removes the installed binaries. Add
+`-RemoveSettings` to also clear your saved headroom/enabled preferences. If you also registered
+the parked APO manually, unregister it separately via `apo\register\unregister-apo.ps1`
+(elevated).
 
 ## Usage
 
@@ -197,45 +210,58 @@ specific hardware before trusting the tray UI.
 
 Persist the Real-Time Limiter's enabled setting and exit immediately, without launching the tray
 — useful for scripting a test where a separate process plays audio while the tray (launched
-normally afterward) keeps the shared-memory setting current.
+normally afterward) picks up the setting.
+
+```
+.\windows\build\tray\HeadphoneSafetyTray.exe --print-default
+```
+
+Read-only: prints the current OS default output device and whether it's VB-Cable — safe to run
+alongside a live tray instance to observe its effect without interfering.
 
 ## Project structure
 
 ```
 windows/
 ├── CMakeLists.txt / build.ps1      Top-level build (CMake + Ninja via VS's Developer Shell)
-├── shared/include/
-│   └── hps_shared_state.h          Tray <-> APO shared-memory IPC contract
-├── apo/                            HeadphoneSafetyApo.dll (real-time constraints apply)
-│   ├── HeadphoneSafetyApo.h/.cpp   IAudioProcessingObject(Configuration) COM object
-│   ├── ApoProcess.cpp              APOProcess real-time callback ONLY
-│   ├── Limiter.h/.cpp              Pure envelope-follower DSP math, no Win32 calls
-│   ├── SharedStateClient.h/.cpp    Reads the shared-memory mapping (opened off the RT thread)
-│   ├── ClassFactory.h/.cpp, ApoDll.cpp/.def   Standard COM registration plumbing
-│   └── register/                   register-apo.ps1 / unregister-apo.ps1
-├── tray/                           HeadphoneSafetyTray.exe (no real-time constraints)
+├── shared_dsp/
+│   └── Limiter.h/.cpp              Pure envelope-follower DSP math, no Win32 calls - shared
+│                                    between the active tray build and the parked apo/ build
+├── tray/                           HeadphoneSafetyTray.exe - the shipped app
 │   ├── main.cpp                    Entry point, background thread + Win32 message loop
 │   ├── TrayIcon.h/.cpp             Shell_NotifyIcon + context menu
 │   ├── VolumeCap.h/.cpp            IAudioEndpointVolume poll/clamp
+│   ├── LimiterEngine.h/.cpp        WASAPI loopback capture -> limiter -> render, one thread
+│   ├── LimiterStatus.h/.cpp        Thread-safe live status (limiting/blocked-reason) for the menu
+│   ├── DefaultDeviceSwitcher.h/.cpp  IPolicyConfig wrapper + Bluetooth voice-endpoint detection
+│   ├── VBCableDetector.h/.cpp      Finds the "CABLE Input (VB-Audio Virtual Cable)" device
+│   ├── PolicyConfig.h              Undocumented IPolicyConfig interface/GUID declarations
 │   ├── DeviceWatcher.h/.cpp        IMMNotificationClient - device change reactions
 │   ├── TimeoutRunner.h/.cpp        Runs a poll tick with a timeout, never blocks the caller
-│   ├── SharedStateServer.h/.cpp    Writes the shared-memory mapping
+│   ├── SharedStateServer.h/.cpp    Writes a shared-memory status mapping (diagnostic use)
 │   └── Settings.h/.cpp             HKCU-backed user preferences
-├── tools/                          Dev-only diagnostics, not shipped (loopback capture, IPC dump)
+├── apo/                            PARKED reference code - see docs/windows-port.md. Not shipped
+│                                    by install.ps1 by default; kept building, not deleted.
+├── tools/                          Dev-only diagnostics, not shipped (loopback capture w/
+│                                    explicit device id, force_revert_default watchdog, IPC dump)
 └── packaging/                      install.ps1 / uninstall.ps1
 ```
 
 ## Acknowledgments
 
+- [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) — the free virtual audio driver the
+  Real-Time Limiter routes through; the same "capture -> process -> render to real device"
+  architecture this project's macOS build already uses with BlackHole.
 - [Equalizer APO](https://sourceforge.net/projects/equalizerapo/) and its
   [source mirror](https://github.com/mirror/equalizerapo) — the real-world precedent proving a
   solo/indie developer can ship a system-wide unsigned APO, and the actual reference for both the
-  `DisableProtectedAudioDG` mechanism and the registry-ownership fix this project needed.
+  `DisableProtectedAudioDG` mechanism and the registry-ownership fix used by the parked `apo/`
+  approach.
 - [PotatoAPO](https://github.com/Dybios/PotatoAPO) — a minimal, real-device-attaching APO used as
-  the structural reference for `HeadphoneSafetyApo`'s COM object and registration scheme.
+  the structural reference for the parked `apo/` approach's COM object and registration scheme.
 - [dechamps/APO](https://github.com/dechamps/APO) — technical documentation of the
-  `MMDevices\Audio` registry key's TrustedInstaller ownership, which this project independently
-  confirmed and fixed.
+  `MMDevices\Audio` registry key's TrustedInstaller ownership, independently confirmed and fixed
+  while building the parked `apo/` approach.
 
 ## License
 

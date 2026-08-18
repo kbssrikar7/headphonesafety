@@ -35,7 +35,7 @@ whatever mechanism is idiomatic there:
 |---|---|---|
 | macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `v*`) |
 | Linux | Shipping (Ubuntu 24.04 GNOME tested; `.deb` is Debian/Ubuntu-family only, see [`linux/README.md`](linux/README.md#requirements-ubuntu-or-any-linux) for other distros) | [`linux/`](linux/) — [README](linux/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `linux-v*`) |
-| Windows | Volume Cap shipping and fully working; Real-Time Limiter built and correctly registered but blocked from loading on the primary dev machine's audio driver (may work on other hardware — see [`windows/README.md`](windows/README.md) for the "Known limitation" note) | [`windows/`](windows/) — [README](windows/README.md) |
+| Windows | Shipping — both Volume Cap and Real-Time Limiter fully working, verified live with real measured numbers against real Bluetooth headphones (0 dBFS in, -9.9dB out at a 10dB headroom setting). Requires [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) for the Real-Time Limiter — see [`windows/README.md`](windows/README.md) | [`windows/`](windows/) — [README](windows/README.md) |
 | Android | Architecture guide only, not yet built | [`docs/android-port.md`](docs/android-port.md) |
 
 Each shipping platform is a self-contained subdirectory with its own build, install, and usage
@@ -44,11 +44,14 @@ architecture research written before implementation, kept even after a platform 
 [`docs/ubuntu-port.md`](docs/ubuntu-port.md), which is what `linux/` was actually built from) as
 the record of *why* each platform's design looks the way it does:
 
-- [Windows](docs/windows-port.md) — via a Windows Audio Processing Object, with real-world
-  precedent ([Equalizer APO](https://sourceforge.net/projects/equalizerapo/)) showing it's
-  achievable without a permission prompt at runtime. Now the build log too: confirmed correct
-  registration end-to-end, plus a real, previously-undocumented registry-ownership blocker found
-  and fixed along the way — see the doc's "Known blocker" section for what's still unresolved.
+- [Windows](docs/windows-port.md) — originally planned around a Windows Audio Processing Object,
+  with real-world precedent ([Equalizer APO](https://sourceforge.net/projects/equalizerapo/))
+  showing it's achievable without a permission prompt at runtime; confirmed correctly built and
+  registered end-to-end, but never actually loaded by `audiodg.exe` on the dev machine across two
+  driver stacks (see the doc's "Known blocker" section) — kept as parked reference code. What
+  actually ships is a WASAPI-loopback + virtual-cable architecture instead (mirroring macOS's own
+  BlackHole-based design), verified live with real measured peak-capping numbers against real
+  Bluetooth headphones — see the doc's "Approach B: what was actually built and verified" section.
 - [Ubuntu / Linux](docs/ubuntu-port.md) — the most favorable of the platforms researched, and the
   one this repo's `linux/` was actually built from: PipeWire's built-in monitor sources need no
   virtual driver and, for a native (non-Flatpak) app, no permission prompt at all.

@@ -1,5 +1,6 @@
 #include "TrayIcon.h"
 
+#include "VBCableDetector.h"
 #include "VolumeCap.h"
 
 namespace hps {
@@ -53,12 +54,40 @@ std::wstring DescribeCurrentOutput() {
     return L"Current output: " + device.friendlyName;
 }
 
+// Reports the Real-Time Limiter's ACTUAL live state (from LimiterStatus, written by the
+// background thread from what it really did) rather than settings->limiterEnabled (the desired
+// state) - these can briefly disagree, e.g. right after enabling with VB-Cable not installed, or
+// mid-revert after a device change, and the menu should tell the user what's really happening,
+// not just echo the checkbox back at them.
+std::wstring DescribeLimiterStatus(const Settings* settings, const LimiterStatus* limiterStatus) {
+    if (!settings->limiterEnabled) {
+        return L"Real-Time Limiter: off";
+    }
+    bool limiting = false;
+    std::wstring protectedDevice;
+    limiterStatus->Get(limiting, protectedDevice);
+    if (limiting) {
+        return L"Limiting active (protecting " + protectedDevice + L")";
+    }
+    hps::VBCableInfo cable = hps::FindVBCable();
+    if (!cable.found) {
+        return L"Real-Time Limiter: VB-Cable not installed";
+    }
+    std::wstring blockedReason = limiterStatus->GetBlockedReason();
+    if (!blockedReason.empty()) {
+        return L"Real-Time Limiter: " + blockedReason;
+    }
+    return L"Real-Time Limiter: starting...";
+}
+
 }  // namespace
 
-TrayIcon::TrayIcon(HINSTANCE hInstance, Settings* settings, SharedStateServer* sharedState)
+TrayIcon::TrayIcon(HINSTANCE hInstance, Settings* settings, SharedStateServer* sharedState,
+                    LimiterStatus* limiterStatus)
     : hwnd_(nullptr),
       settings_(settings),
       sharedState_(sharedState),
+      limiterStatus_(limiterStatus),
       taskbarCreatedMsg_(0),
       iconId_(1) {
     WNDCLASSW wc{};
@@ -125,6 +154,8 @@ HMENU TrayIcon::BuildMenu() const {
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, DescribeCurrentOutput().c_str());
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
                 DescribeVolumeCapStatus(settings_->headroomDb).c_str());
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
+                DescribeLimiterStatus(settings_, limiterStatus_).c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING | (settings_->volumeCapEnabled ? MF_CHECKED : MF_UNCHECKED),

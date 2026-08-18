@@ -24,15 +24,27 @@ rollback.** Every one of those lessons cost real debugging time on macOS and the
 failure modes (timing windows, misleading success signals, blocking calls on a hot path) are
 generic enough that they are very likely to recur on Windows in some form.
 
-**Status as of the Phase 3 implementation session**: Volume Cap is fully built, tested, and
-working live. The APO (Real-Time Limiter) is fully built and *correctly registered* (confirmed
-against real reference implementations, confirmed via COM instantiation, confirmed via registry
-readback surviving a reboot) but **`audiodg.exe` never actually loads it on the test machine's
-Conexant ISST driver**, for reasons not resolvable without kernel-level debugging — see "Known
-blocker: APO never loads on Conexant ISST" below before spending more time on registration
-mechanics; that part is already correct. If you're picking this up on different hardware, the
-APO code and registration scripts should be tried as-is first — this may well be driver-specific,
-not a fundamental Windows limitation.
+**Status as of the latest session**: both features are fully built, tested, and working live,
+shipped via **Approach B** (WASAPI loopback capture + VB-Audio Virtual Cable — see that section
+below). Volume Cap has been confirmed live against real Bluetooth headphones (correct
+classification, clamping, and disconnect/reconnect recovery). The Real-Time Limiter has been
+confirmed live with real measured numbers against real Bluetooth headphones (Sony WH-CH720N): a
+0 dBFS test tone measured -0.1dB before the limiter and -9.9dB after it with a 10dB headroom
+setting, matching the configured ceiling to within 0.1dB and holding steady — see "Approach B:
+what was actually built and verified" below for the full writeup, including two real bugs found
+and fixed along the way (a render-format mismatch against non-wired devices, and Bluetooth's
+separate HFP/A2DP endpoints).
+
+**Approach A (the APO)** is fully built and *correctly registered* (confirmed against real
+reference implementations, confirmed via COM instantiation, confirmed via registry readback
+surviving a reboot) but **`audiodg.exe` never actually loads it on the test machine**, on two
+structurally different driver stacks (Conexant ISST built-in speakers, and Bluetooth A2DP), for
+reasons not resolvable without kernel-level debugging — see "Known blocker: APO never loads on
+Conexant ISST" below. It is kept in the repo as parked, documented reference code (not deleted,
+not shipped by `install.ps1` by default) — if you're picking this up on different hardware, the
+APO code and registration scripts should be tried as-is first, since this may well be
+driver/OS-build-specific, not a fundamental Windows limitation. But do not block shipping on it:
+Approach B is the proven, working path.
 
 ---
 
@@ -200,6 +212,67 @@ guaranteed to work, at the cost of the permission prompt:
    gate than macOS's per-app indicator (more of a system-wide toggle, usually already on), but
    it's not permission-free — flag this clearly to the user if this fallback is what ends up
    shipping.
+
+#### Approach B: what was actually built and verified (no longer "fallback" — this is what ships)
+
+The plan above was written before Approach A's "APO never loads" blocker was found. Once that
+became a confirmed, cross-driver-stack dead end (see "Known blocker" below), Approach B was built
+for real, in `windows/tray/` (`LimiterEngine.h/.cpp`, `DefaultDeviceSwitcher.h/.cpp`,
+`VBCableDetector.h/.cpp`, `PolicyConfig.h`), reusing the same `Limiter` DSP class (promoted to
+`windows/shared_dsp/`) unchanged from the parked `apo/` build. Differences from the plan above,
+found by actually building and testing it live:
+
+- **No microphone permission prompt was actually observed**, on this machine, across an entire
+  session of testing. The plan's caveat above was a reasonable prediction from documentation, not
+  a confirmed finding — for an unpackaged Win32 desktop app (no AppContainer/MSIX manifest), the
+  microphone privacy toggle does not appear to gate WASAPI loopback capture the way it might for a
+  UWP/Store app. If you see a prompt on different hardware/Windows build, it's still worth
+  reporting, but do not assume it's guaranteed to appear.
+- **Real device format mismatches are a real, live-confirmed problem, not a theoretical edge
+  case.** `LimiterEngine` originally initialized the render side using VB-Cable's own capture mix
+  format unconditionally. That happened to match this machine's built-in Conexant speakers, but
+  FAILED with `AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008)` against real Bluetooth headphones,
+  whose native format differed (44100 Hz vs VB-Cable's 48000 Hz). The fix (now shipped): if
+  render-side `Initialize` fails with the capture format, retry with the render device's own
+  native format (`IAudioClient::GetMixFormat`), and if that format's sample rate or channel count
+  differs from the capture side's, resample (linear interpolation, continuous across packet
+  boundaries) and remix (mono↔stereo) on the fly before rendering. See `LimiterEngine.cpp`'s
+  comments at the render-Initialize call site and the `resampleAndAppend` lambda for the exact
+  mechanism. This is not a polished production-quality resampler (no anti-aliasing filter) but is
+  adequate for the mild sample-rate deltas actually seen (Bluetooth A2DP codecs, not exotic rates).
+- **Bluetooth exposes two separate render endpoints for one physical device — A2DP (music,
+  e.g. 44100 Hz/2ch, friendly name like "Headphones") and HFP/Hands-Free (call/voice, e.g.
+  16000 Hz/1ch, friendly name like "Headset")** — and Windows can silently switch which one is
+  the OS default (observed live: some other app requesting microphone/call access flipped it
+  mid-session). `LimiterEngine`'s caller (`main.cpp`'s `attemptStartLimiter`) now checks
+  `DefaultDeviceSwitcher::IsLikelyBluetoothVoiceEndpoint` (a simple sample-rate-under-32000Hz
+  heuristic — real A2DP codecs never go that low, HFP's CVSD/mSBC codecs do) before ever touching
+  device routing, and refuses to start rather than silently "protecting" a voice-call channel.
+  The tray's context menu (`LimiterStatus::SetBlockedReason` / `TrayIcon.cpp`'s
+  `DescribeLimiterStatus`) surfaces this to the user instead of a generic "starting..." message.
+  The startup stray-VB-Cable-recovery path (`RevertStrayVBCableDefaultOutput`) was given the same
+  preference (skip voice endpoints when picking a fallback device to revert to).
+- **The actual measurement, confound-free**: played a genuinely full-scale (0 dBFS, confirmed via
+  `ffmpeg volumedetect` on the source file itself before playback) 1kHz test tone with the
+  limiter enabled and 10dB headroom, while simultaneously WASAPI-loopback-capturing both VB-Cable
+  (pre-limiter input, explicit device id via `tools/loopback_capture.exe`'s optional third
+  argument) and the real A2DP headphones endpoint (post-limiter output, also explicit device id —
+  capturing "the default" during limiting would just capture VB-Cable again, since that's what
+  the OS default is switched to while active), 4 seconds each, with a per-second `ffmpeg
+  volumedetect` breakdown to rule out any transient/settling artifact:
+  - INPUT: max -0.1dB, mean -1.6dB, identical every second.
+  - OUTPUT: max **-9.9dB**, mean -11.3dB, identical every second — the configured -10dB ceiling
+    held to within 0.1dB, with none of the built-in-speakers device's attack-transient/settling
+    artifact that had made an earlier attempt against that device inconclusive (see "A real
+    measurement confound found and resolved" further down, still worth reading if you need to
+    test against a laptop's own speakers rather than headphones).
+- **Reliability trade-off, different from Approach A's**: because the OS default output is
+  actually switched to VB-Cable while limiting is active, force-killing the tray process (as
+  opposed to a clean Quit) leaves the OS default stuck on VB-Cable until the next launch's
+  unconditional startup-recovery check runs. This is the same trade-off the macOS/Linux ports
+  already accept for their own virtual-device architectures — Approach A's APO would not have had
+  this problem (had it worked), since it never rerouted the default device at all. Document this
+  plainly rather than claiming Approach B has Approach A's structural independence — it doesn't.
 
 ### Limiter DSP algorithm
 
@@ -446,37 +519,79 @@ Lesson: an ad-hoc diagnostic script that bypasses a project's own backup/rollbac
 temporarily during debugging, can corrupt the state that tooling relies on for future runs. Worth
 remembering for any future live registry debugging on this project.
 
+### A real measurement confound found and resolved (Approach B, testing against built-in speakers)
+
+While first verifying Approach B's Real-Time Limiter (see "Approach B: what was actually built
+and verified" above), an initial test against this machine's built-in "Speakers (Conexant ISST
+Audio)" device showed a confusing result: mean level dropped roughly as expected with the limiter
+on, but peak level barely changed (e.g. -1.1dB unprocessed vs -1.1dB processed), which looked like
+the limiter wasn't actually capping peaks.
+
+Root cause, found via seven sequential elimination tests: **the Speakers device itself has its
+own independent hardware/driver-level dynamics processing** (attack ~1 second, settling to
+roughly -8dB regardless of what's fed into it), unrelated to this project's code entirely. Ruled
+out as explanations before landing on this: Windows Communications ducking, device volume level
+(tested at both max and -17dB — identical), vendor `Disable_SysFx` "enhancements" (tested
+disabled — identical), playback tool (`ffplay` vs WinMM `SoundPlayer` — identical), sample
+rate/channel mismatch (tested with a format-matched 48kHz stereo tone — identical). The decisive
+test was a **simultaneous** input(VB-Cable)/output(Speakers) capture with a per-second breakdown:
+input held constant at -4.1dB across all 4 seconds (proving VB-Cable capture itself introduces no
+artifact), while output showed "-1.1dB" for the first second then settled to "-8.0dB" for the
+remaining three — an attack-transient signature that could only originate in the Speakers
+device's own signal path, since the input side (captured simultaneously, from the same source
+audio) showed no such transient at all.
+
+This was resolved conclusively, not left as an open question, by repeating the identical
+methodology against real Bluetooth headphones instead (a completely different, Microsoft-owned
+driver stack with no reason to share a Conexant-specific quirk) — see "Approach B: what was
+actually built and verified" above for that result. **If you need to verify the limiter again in
+the future, prefer testing against headphones (wired or Bluetooth) over a laptop's built-in
+speakers** — built-in speaker devices are more likely to have their own vendor dynamics
+processing that will confound a peak-level measurement in exactly this way.
+
 ---
 
 ## Distribution notes
 
-- Ad-hoc/self-signed is fine for personal use, same as the macOS build. For any wider
-  distribution, note that DisableProtectedAudioDG plus an unsigned APO will show Windows
-  SmartScreen's "unknown publisher" warning on install — document this for users the same way the
-  macOS README documents the Gatekeeper right-click-to-open step.
-- The installer must also perform the take-ownership step described above (item 5 under "Feature
-  2") for the target endpoint's FxProperties key — confirmed necessary and working end-to-end
-  (verified: FxProperties write succeeded, `audiosrv` restarted cleanly, no Event Viewer errors,
-  audio confirmed still audible and unmodified through the pass-through APO). This should be
-  framed to users as part of the same one-time elevated install step as DisableProtectedAudioDG,
-  not a separate scarier-sounding action.
-- If using Approach B (virtual cable), document the separate driver install step clearly, the same
-  way the macOS README documents installing BlackHole via Homebrew as a prerequisite.
+**As shipped (Approach B)**: `install.ps1` does NOT require elevation and does not touch
+`DisableProtectedAudioDG` or any `TrustedInstaller`-owned registry key — confirmed live, both
+`install.ps1` and `uninstall.ps1` run end-to-end from a normal, unelevated PowerShell. Windows
+SmartScreen may still show an "unknown publisher" warning on first run since the binary itself
+isn't code-signed — document this the same way the macOS README documents the Gatekeeper
+right-click-to-open step. VB-Audio Virtual Cable is a separate, one-time manual install (its own
+GUI installer, no documented silent-install switch found) — `install.ps1` checks for it and warns
+clearly rather than silently failing if it's missing, the same way the macOS README documents
+installing BlackHole via Homebrew as a prerequisite.
+
+**If Approach A (the APO) is ever revived** on hardware where it actually loads: it needs
+`DisableProtectedAudioDG` (unsigned APO) plus the take-ownership step for the target endpoint's
+FxProperties key (confirmed necessary and working end-to-end on this machine even though the APO
+never actually got loaded by `audiodg.exe` — the registration mechanics themselves are correct).
+That would need to go back to requiring elevation, framed as one combined one-time step, not two
+separate scarier-sounding ones.
 
 ## Testing checklist (same bar as the macOS version)
 
-- [ ] Volume Cap clamps correctly on a headphone-classified device, leaves speakers untouched.
-- [ ] Real-Time Limiter is audible and does not silently do nothing.
-- [ ] Confirmed via logged peak values that a deliberately loud/clipping input signal is actually
-      capped at the output, not just passed through at a slightly lower level.
-- [ ] Toggling the limiter off reverts output cleanly and promptly.
-- [ ] Force-killing the process while the limiter is active does not leave the system silently
-      stuck — either it stays fine (APO approach, since it's not "this app's process" that's doing
-      the routing) or it recovers automatically (Approach B, on next launch).
-- [ ] Physically disconnecting headphones while the limiter is active reverts to a safe output
-      device automatically, without the app hanging.
-- [ ] No component of the rollback path performs a live query against a device that might be
+- [x] Volume Cap clamps correctly on a headphone-classified device, leaves speakers untouched.
+      Confirmed live against real Sony WH-CH720N Bluetooth headphones.
+- [x] Real-Time Limiter is audible and does not silently do nothing.
+- [x] Confirmed via logged peak values that a deliberately loud/clipping input signal is actually
+      capped at the output, not just passed through at a slightly lower level. 0 dBFS in, -9.9dB
+      out at a 10dB headroom setting, measured via simultaneous pre/post-limiter WASAPI loopback
+      capture against real Bluetooth headphones.
+- [x] Toggling the limiter off reverts output cleanly and promptly (`revertLimiter()` in
+      `main.cpp`, verified live).
+- [x] Force-killing the process while the limiter is active does not leave the system silently
+      stuck — recovers automatically on next launch (Approach B's `RevertStrayVBCableDefaultOutput`
+      startup check, verified live).
+- [x] Physically disconnecting headphones while the limiter is active reverts to a safe output
+      device automatically, without the app hanging. Verified live with a real physical Bluetooth
+      disconnect/reconnect.
+- [x] No component of the rollback path performs a live query against a device that might be
       mid-disconnect.
+- [x] Refuses to start the limiter against a Bluetooth device's HFP/voice-call endpoint instead of
+      its A2DP/music endpoint, and reports why via the tray menu rather than silently limiting the
+      wrong channel. Verified live by forcing the OS default onto the HFP endpoint.
 
 ## Key references
 

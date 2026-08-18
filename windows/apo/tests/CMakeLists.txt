@@ -2,6 +2,5 @@
 # needed. Run directly after building: windows\build\apo\tests\limiter_test.exe
 add_executable(limiter_test
     limiter_test.cpp
-    ../Limiter.cpp
 )
-target_include_directories(limiter_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(limiter_test PRIVATE hps_dsp)

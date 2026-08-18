@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(hps_shared INTERFACE)
 target_include_directories(hps_shared INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/shared/include)
 
+add_subdirectory(shared_dsp)
 add_subdirectory(apo)
 add_subdirectory(tray)
 add_subdirectory(tools)

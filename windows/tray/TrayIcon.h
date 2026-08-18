@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include "LimiterStatus.h"
 #include "Settings.h"
 #include "SharedStateServer.h"
 
@@ -27,8 +28,13 @@ namespace hps {
 class TrayIcon {
 public:
     // hInstance: the module handle for window class registration (from wWinMain's first
-    // parameter). settings/sharedState: see the class comment above on ownership.
-    TrayIcon(HINSTANCE hInstance, Settings* settings, SharedStateServer* sharedState);
+    // parameter). settings/sharedState/limiterStatus: see the class comment above on ownership.
+    // limiterStatus is the background thread's live view of whether the limiter is actually
+    // running right now and which device it's protecting - distinct from
+    // settings->limiterEnabled, which is the desired state (may briefly disagree with reality,
+    // e.g. VB-Cable missing, or mid-revert after a device change).
+    TrayIcon(HINSTANCE hInstance, Settings* settings, SharedStateServer* sharedState,
+             LimiterStatus* limiterStatus);
     ~TrayIcon();
 
     TrayIcon(const TrayIcon&) = delete;
@@ -55,6 +61,7 @@ private:
     HWND hwnd_;
     Settings* settings_;
     SharedStateServer* sharedState_;
+    LimiterStatus* limiterStatus_;
     UINT taskbarCreatedMsg_;
     UINT iconId_;
 

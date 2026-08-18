@@ -1,6 +1,8 @@
 // A simple, non-lookahead envelope-follower peak limiter. Pure DSP math - no Win32/COM calls, no
-// allocation inside Process() - safe to call from a real-time audio thread (see ApoProcess.cpp,
-// which owns the real-time-safety constraints this class must respect).
+// allocation inside Process() - safe to call from a real-time audio thread. Promoted here (from
+// windows/apo/) as a shared target both windows/apo/ (the parked APO approach, kept as reference)
+// and windows/tray/ (LimiterEngine.h/.cpp, the active WASAPI-loopback approach) link against, so
+// the DSP algorithm has exactly one copy rather than being duplicated and allowed to drift.
 //
 // Algorithm matches docs/windows-port.md's "Limiter DSP algorithm" section exactly:
 //   1. instantaneous level = |sample|

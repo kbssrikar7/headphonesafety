@@ -1,11 +1,19 @@
 // loopback_capture: a throwaway diagnostic tool, NOT part of the shipped app. Captures N seconds
-// of the current default render device's loopback output (via WASAPI's AUDCLNT_STREAMFLAGS_LOOPBACK,
+// of a render device's loopback output (via WASAPI's AUDCLNT_STREAMFLAGS_LOOPBACK,
 // see https://learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording) to a WAV file,
 // so a separately-played test tone's actual peak level at the hardware can be measured (e.g. via
-// `ffmpeg -i captured.wav -af volumedetect -f null -`) to verify the Real-Time Limiter APO is
+// `ffmpeg -i captured.wav -af volumedetect -f null -`) to verify the Real-Time Limiter is
 // actually reducing gain, not just passing audio through unmodified.
 //
-// Usage: loopback_capture.exe <output.wav> <durationSeconds>
+// Usage: loopback_capture.exe <output.wav> <durationSeconds> [deviceId]
+//
+// deviceId (optional): an endpoint ID string exactly as IMMDevice::GetId() returns it. Needed for
+// Approach B (WASAPI loopback + VB-Cable) measurements: while the Real-Time Limiter is active,
+// the OS DEFAULT render device is VB-Cable itself (the limiter's own capture source), so
+// capturing "the default" would just capture the unprocessed signal being fed INTO the limiter,
+// not the actual processed signal LimiterEngine renders out to the real device. Pass the real
+// device's ID explicitly to capture the true post-limiter output. Omit to capture the default
+// device, as before (correct for a plain pass-through/no-limiter baseline).
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -59,12 +67,23 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     IMMDevice* device = nullptr;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
-    enumerator->Release();
-    if (FAILED(hr)) {
-        fwprintf(stderr, L"GetDefaultAudioEndpoint failed: 0x%08x\n", hr);
-        return 1;
+    if (argc >= 4) {
+        hr = enumerator->GetDevice(argv[3], &device);
+        if (FAILED(hr)) {
+            fwprintf(stderr, L"GetDevice(%ls) failed: 0x%08x\n", argv[3], hr);
+            enumerator->Release();
+            return 1;
+        }
+        wprintf(L"Capturing explicit device: %ls\n", argv[3]);
+    } else {
+        hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+        if (FAILED(hr)) {
+            fwprintf(stderr, L"GetDefaultAudioEndpoint failed: 0x%08x\n", hr);
+            enumerator->Release();
+            return 1;
+        }
     }
+    enumerator->Release();
 
     IAudioClient* audioClient = nullptr;
     hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,

@@ -11,7 +11,6 @@ add_library(HeadphoneSafetyApo SHARED
     ClassFactory.cpp
     HeadphoneSafetyApo.cpp
     ApoProcess.cpp
-    Limiter.cpp
     SharedStateClient.cpp
 )
 
@@ -23,6 +22,7 @@ add_subdirectory(tests)
 # vcxproj (github.com/Dybios/PotatoAPO) rather than assumed.
 target_link_libraries(HeadphoneSafetyApo PRIVATE
     hps_shared
+    hps_dsp
     ole32
     AudioBaseProcessingObject
     audiomediatypecrt
