@@ -6,25 +6,30 @@
 #
 # Does NOT require elevation. The shipped architecture (VB-Cable + WASAPI loopback, not a
 # driver-level APO) has no TrustedInstaller-owned registry keys to touch and Task Scheduler's
-# -RunLevel Limited at-logon trigger works fine unelevated. Run windows/build.ps1 first if you
-# have not already - this script installs from windows/build/, it does not build anything itself.
+# -RunLevel Limited at-logon trigger works fine unelevated.
 #
-# Usage (from a normal PowerShell, from the repo root or anywhere):
+# Finds HeadphoneSafetyTray.exe in either of two layouts: right next to this script (a
+# standalone release zip - see the GitHub Releases page) or under ..\build\tray (a dev checkout
+# built via windows\build.ps1). Checked in that order.
+#
+# Usage (from a normal PowerShell, from the repo root, an unzipped release, or anywhere):
 #   .\windows\packaging\install.ps1
 #   .\windows\packaging\install.ps1 -SkipVBCableCheck   # if you know it's installed under a
 #                                                        # different friendly name
 [CmdletBinding()]
 param(
-    [string]$BuildDir = (Join-Path $PSScriptRoot "..\build"),
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "HeadphoneSafety"),
     [switch]$SkipVBCableCheck
 )
 
 $ErrorActionPreference = "Stop"
 
-$trayExe = Join-Path $BuildDir "tray\HeadphoneSafetyTray.exe"
-if (-not (Test-Path $trayExe)) {
-    throw "Built binary not found under $BuildDir - run .\windows\build.ps1 first."
+$releaseLayoutExe = Join-Path $PSScriptRoot "HeadphoneSafetyTray.exe"
+$devLayoutExe = Join-Path $PSScriptRoot "..\build\tray\HeadphoneSafetyTray.exe"
+$trayExe = if (Test-Path $releaseLayoutExe) { $releaseLayoutExe } elseif (Test-Path $devLayoutExe) { $devLayoutExe } else { $null }
+if (-not $trayExe) {
+    throw "HeadphoneSafetyTray.exe not found next to this script or under ..\build\tray - " +
+          "if building from source, run .\windows\build.ps1 first."
 }
 
 Write-Host "[1/4] Checking for VB-Audio Virtual Cable..."
