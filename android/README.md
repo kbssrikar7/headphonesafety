@@ -13,8 +13,8 @@
 
 ---
 
-> This is the Android implementation. See the [repo root](../README.md) for the other platforms
-> (macOS and Linux are also implemented; Windows is an architecture guide only, not yet built).
+> This is the Android implementation. See the [repo root](../README.md) for the other platforms —
+> macOS, Linux, and Windows are all shipping too.
 
 ## Status
 

@@ -12,8 +12,8 @@
 
 ---
 
-> This is the Windows implementation. See the [repo root](../README.md) for the other platforms
-> (macOS and Linux are shipping; Android is an architecture guide only).
+> This is the Windows implementation. See the [repo root](../README.md) for the other platforms —
+> macOS, Linux, and Android are all shipping too.
 
 ## Why this exists
 

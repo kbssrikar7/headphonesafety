@@ -5,8 +5,8 @@ headphone use by bringing iOS's "Reduce Loud Sounds" behavior to the desktop. Se
 [`docs/ubuntu-port.md`](../docs/ubuntu-port.md) for the full architecture research this build
 follows.
 
-> See the [repo root](../README.md) for the other platforms (macOS is also implemented; Windows
-> and Android are architecture guides only, not yet built).
+> See the [repo root](../README.md) for the other platforms — macOS, Windows, and Android are all
+> shipping too.
 
 ## Status
 

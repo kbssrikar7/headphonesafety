@@ -4,8 +4,9 @@
   # Headphone Safety
 
   Real-time headphone volume/loudness protection, bringing iOS's "Reduce Loud Sounds" behavior
-  to the desktop — on every platform it makes sense for.
+  to macOS, Linux, Windows, and Android.
 
+  ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Android-blue)
   ![License](https://img.shields.io/badge/license-MIT-green)
 </div>
 
@@ -35,8 +36,8 @@ whatever mechanism is idiomatic there:
 |---|---|---|
 | macOS | Shipping | [`macos/`](macos/) — [README](macos/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `v*`) |
 | Linux | Shipping (Ubuntu 24.04 GNOME tested; `.deb` is Debian/Ubuntu-family only, see [`linux/README.md`](linux/README.md#requirements-ubuntu-or-any-linux) for other distros) | [`linux/`](linux/) — [README](linux/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `linux-v*`) |
-| Windows | Shipping — both Volume Cap and Real-Time Limiter fully working, verified live with real measured numbers against real Bluetooth headphones (0 dBFS in, -9.9dB out at a 10dB headroom setting). Requires [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) for the Real-Time Limiter — see [`windows/README.md`](windows/README.md) | [`windows/`](windows/) — [README](windows/README.md) |
-| Android | Shipping as one unified "Headphone Safety" toggle (`minSdk` 26; live-tested on two Samsung devices spanning Android 10→15, no non-Samsung device tested yet); no unconditional system-wide limiter exists on Android, and the Limiter's ceiling is fixed by the device (not user-adjustable — confirmed, not assumed), see [`android/README.md`](android/README.md#device-compatibility) | [`android/`](android/) — [README](android/README.md) |
+| Windows | Shipping — both Volume Cap and Real-Time Limiter fully working, verified live with real measured numbers against real Bluetooth headphones (0 dBFS in, -9.9dB out at a 10dB headroom setting). Requires [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) for the Real-Time Limiter — see [`windows/README.md`](windows/README.md) | [`windows/`](windows/) — [README](windows/README.md), [Releases](https://github.com/kbssrikar7/headphonesafety/releases) (tags `windows-v*`) |
+| Android | Shipping as one unified "Headphone Safety" toggle (`minSdk` 26; live-tested on two Samsung devices spanning Android 10→15, no non-Samsung device tested yet); no unconditional system-wide limiter exists on Android, and the Limiter's ceiling is fixed by the device (not user-adjustable — confirmed, not assumed), see [`android/README.md`](android/README.md#device-compatibility) | [`android/`](android/) — [README](android/README.md), build from source (no APK release published yet) |
 
 Each shipping platform is a self-contained subdirectory with its own build, install, and usage
 instructions — start with that platform's README. The `docs/*-port.md` guides are from-scratch
