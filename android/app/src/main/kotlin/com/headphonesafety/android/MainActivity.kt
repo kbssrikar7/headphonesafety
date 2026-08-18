@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.audiofx.Equalizer
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -36,7 +37,9 @@ class MainActivity : Activity() {
     private lateinit var harnessButton: Button
     private lateinit var harnessResultText: TextView
     private lateinit var testTonePlayButton: Button
+    private lateinit var eqControlButton: Button
     private var testTonePlayer: MediaPlayer? = null
+    private var eqControlEffects: List<Equalizer> = emptyList()
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val limiterStatusRunnable = object : Runnable {
@@ -69,6 +72,9 @@ class MainActivity : Activity() {
             harnessButton.setOnClickListener { startHarnessCapture() }
             testTonePlayButton.visibility = android.view.View.VISIBLE
             testTonePlayButton.setOnClickListener { toggleTestTone() }
+            eqControlButton = findViewById(R.id.eqControlButton)
+            eqControlButton.visibility = android.view.View.VISIBLE
+            eqControlButton.setOnClickListener { toggleEqPositiveControl() }
         }
         batterySettingsButton.setOnClickListener {
             // Opens the OS's battery-optimization list screen, not the direct per-app request
@@ -148,6 +154,7 @@ class MainActivity : Activity() {
         super.onDestroy()
         testTonePlayer?.release()
         testTonePlayer = null
+        releaseEqPositiveControl()
     }
 
     private fun updateStatusText() {
@@ -279,6 +286,79 @@ class MainActivity : Activity() {
         }
         testTonePlayer = player
         testTonePlayButton.text = "Stop test tone (debug)"
+    }
+
+    /**
+     * Debug-only positive control for the measurement harness (see the plan's step 2a control
+     * test). Attaches `Equalizer` — a stage the harness has no reason to be blind to — to every
+     * discovered session with all bands pinned to their minimum gain, so a captured level drop
+     * proves the tap sees post-session-insert-effect audio at all. Needed because the original
+     * Limiter-only control test (enabled vs `releaseAll()`) came back with no measurable
+     * difference, which is ambiguous: it's consistent with either "harness can't see session
+     * effects" or "the test tone's level at the tap never got close to the Limiter's -2dB
+     * threshold, so of course enabling it changed nothing." Equalizer's effect isn't
+     * threshold-gated, so it settles which explanation is right.
+     */
+    private fun toggleEqPositiveControl() {
+        if (eqControlEffects.isNotEmpty()) {
+            releaseEqPositiveControl()
+            eqControlButton.text = "EQ min test (debug)"
+            return
+        }
+        // Targets the test tone's own session ID directly (MediaPlayer.getAudioSessionId(),
+        // no dumpsys involved) rather than every discovered session — attaching to the whole
+        // discovered set previously gave a false-positive-looking "enabled=true" from unrelated
+        // idle system sessions while the tone's own (high-numbered, actually-playing) session
+        // silently refused to enable, making that earlier control test meaningless.
+        val sessionId = testTonePlayer?.audioSessionId
+        if (sessionId == null || sessionId == 0) {
+            harnessResultText.text = "Start the test tone first — no active session to target."
+            return
+        }
+        eqControlButton.isEnabled = false
+        Thread {
+            val result = runCatching {
+                val eq = Equalizer(0, sessionId)
+                val minLevel = eq.bandLevelRange[0]
+                for (band in 0 until eq.numberOfBands) {
+                    eq.setBandLevel(band.toShort(), minLevel)
+                }
+                eq.enabled = true
+                val readback = eq.enabled
+                android.util.Log.d(
+                    "HPS-PosCtrl",
+                    "tone session $sessionId EQ bands=${eq.numberOfBands} minLevel=$minLevel " +
+                        "enabled=$readback"
+                )
+                eq to readback
+            }.onFailure {
+                android.util.Log.e("HPS-PosCtrl", "EQ attach failed for tone session $sessionId", it)
+            }.getOrNull()
+            runOnUiThread {
+                eqControlButton.isEnabled = true
+                if (result == null) {
+                    harnessResultText.text = "EQ attach FAILED for tone session $sessionId — see logcat"
+                } else {
+                    val (eq, readback) = result
+                    eqControlEffects = listOf(eq)
+                    eqControlButton.text = "Release EQ min test (debug)"
+                    harnessResultText.text = if (readback) {
+                        "EQ min attached+ENABLED on tone session $sessionId — run harness now"
+                    } else {
+                        "EQ attached to tone session $sessionId but enabled readback=FALSE — " +
+                            "device refuses to enable effects on this live session"
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun releaseEqPositiveControl() {
+        for (eq in eqControlEffects) {
+            runCatching { eq.enabled = false }
+            runCatching { eq.release() }
+        }
+        eqControlEffects = emptyList()
     }
 
     /**

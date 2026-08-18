@@ -162,7 +162,9 @@ class SessionLimiterManager(private val context: Context) {
      * differently. If the expected header is missing outright, that's surfaced as a format
      * mismatch (LimiterStatus.sessionFormatMismatch) rather than silently reported as "0 sessions,"
      * and a looser fallback scrape is used so coverage degrades gracefully instead of going dark. */
-    private fun discoverSessions(): Set<Int> {
+    /** Visible internally so the debug-only positive-control test (MainActivity) can reuse the
+     * same session discovery the real limiter uses, instead of duplicating the dumpsys parsing. */
+    internal fun discoverSessions(): Set<Int> {
         return runCatching {
             val process = ProcessBuilder("dumpsys", "media.audio_flinger")
                 .redirectErrorStream(true)

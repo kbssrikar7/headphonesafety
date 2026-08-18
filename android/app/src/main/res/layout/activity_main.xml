@@ -142,6 +142,14 @@
         android:text="Play test tone (debug)" />
 
     <Button
+        android:id="@+id/eqControlButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"
+        android:text="EQ min test (debug)" />
+
+    <Button
         android:id="@+id/harnessButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
