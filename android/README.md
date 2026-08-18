@@ -66,6 +66,19 @@ and app-dependent**, not universal:
   This is now confirmed **Samsung/One UI-wide** (two different chip/Android-version generations),
   not a one-device fluke — but still unconfirmed for non-Samsung OEMs (Pixel/AOSP, Xiaomi, etc.),
   since no such device has been available to test against.
+- **All three candidate workarounds for the -2 dB clamp tested and failed identically — confirmed
+  no adjustable `DynamicsProcessing` dB path exists on this hardware at all.** Tried, each read
+  back immediately after being set: `Limiter.setPostGain(-20)` (readback 0.0), MBC re-enabled with
+  a permissive threshold/ratio and `setPostGain(-20)` on every band (readback 0.0 on all 6 bands),
+  and PreEq re-enabled with `setGain(-20)` on every band (readback 0.0 on all 6 bands). Every
+  attempt silently reset to its inert default — same failure shape as the threshold clamp above.
+  `setEnabled()` itself is real (confirmed via a `dumpsys media.audio_flinger` effect-chain
+  before/after diff — the effect genuinely appears in and disappears from the live audio graph),
+  but no numeric parameter that would change *how much* limiting happens can be moved from
+  userspace on this device. See `docs/android-port.md`'s "Clamp-workaround arms" note for the full
+  methodology and why the original `AudioPlaybackCaptureConfiguration`-based measurement harness
+  had to be abandoned first (it sat upstream of session effects entirely, an instrument-blindness
+  issue independent of this finding).
 - **Device-capability check added**: not every phone's audio HAL ships a `DynamicsProcessing`
   implementation at all — the app now queries this upfront (`AudioEffect.queryEffects()` for the
   effect's type UUID) and shows "Real-Time Limiter isn't available on this device" instead of
@@ -271,8 +284,12 @@ command is run.
 2. **Enable Volume Cap**, pick a headroom percentage (an approximation — Android's stream-volume
    API is index-based, not decibel-based, unlike the other three platforms; see
    [`docs/android-port.md`](../docs/android-port.md) for why).
-3. **Enable Real-Time Limiter** (experimental), pick a headroom in true dB. Run the `adb shell pm
-   grant` command above first, or the status text will tell you it's protecting nothing.
+3. **Enable Real-Time Limiter** (experimental), pick a headroom preset. Run the `adb shell pm
+   grant` command above first, or the status text will tell you it's protecting nothing. **On
+   Samsung/One UI devices tested, this preset currently has no effect** — the vendor DSP
+   hard-pins the actual ceiling to ~-2 dB regardless of what's picked here (see above); still worth
+   enabling for the fixed peak-limiting protection it does provide, just don't expect the number
+   picked to change anything on this hardware.
 4. Both features run from a single foreground service (visible as a persistent notification, same
    reason every other platform in this repo needs a persistent background component) and react
    automatically to headphone/Bluetooth connects and disconnects.
@@ -298,9 +315,20 @@ command is run.
       failures when `DynamicsProcessing` isn't present (capability check via
       `AudioEffect.queryEffects()`) — confirmed the effect *is* available on both test devices, so
       this branch's UI text itself is unverified (no device without the effect to test against).
-- [ ] Real-Time Limiter's actual acoustic effect (does loud audio measurably get capped) not yet
-      confirmed by ear or by level measurement — Android has no built-in equivalent to the
-      `ffmpeg`/`parecord` peak-logging setup the Linux port used for this.
+- [x] Confirmed session-attached effects are genuinely live in the audio path, not just accepting
+      parameters — via a `dumpsys media.audio_flinger` per-session effect-chain diff (attaching/
+      releasing an `Equalizer` on the test tone's own session made its entry appear/disappear from
+      the chain with `Registered=y Enabled=y Suspended=n`). A dB-accurate acoustic measurement
+      (not just activation) is still open — the in-app `AudioPlaybackCaptureConfiguration` harness
+      built for this sits upstream of session effects on this device (fixed pad, unrelated to the
+      actual signal) and a 3.5mm-out → laptop line-in fallback was attempted and abandoned (the
+      laptop's input never received signal). See `docs/android-port.md`'s "Measurement harness"
+      note for the full writeup.
+- [x] All three candidate workarounds for the -2 dB threshold clamp tested and found to fail
+      identically (`Limiter.postGain`, MBC per-band `postGain`, PreEq per-band `gain` — each
+      silently reset to 0.0 on readback regardless of the value requested). Confirmed: no
+      adjustable `DynamicsProcessing` gain/threshold parameter exists on this hardware at all; see
+      `docs/android-port.md`'s "Clamp-workaround arms" note.
 - [x] Force-stopping the app (`am force-stop`) and cold-relaunching auto-resumes the service with
       no manual toggle needed — verified live (service confirmed absent via `dumpsys activity
       services` after force-stop, confirmed `isForeground=true` again immediately after relaunch).

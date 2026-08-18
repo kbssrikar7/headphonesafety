@@ -158,6 +158,68 @@ One-UI-version-specific, or would behave differently on Pixel/AOSP-reference or 
 implementations — flagged in `android/README.md` as a known, honestly-documented device-dependent
 limitation rather than something the app can control from userspace.
 
+**Measurement harness (2026-08-18): built, and its failure mode taught more than a working
+harness would have.** To test whether the -2dB clamp above could be routed around via other
+`DynamicsProcessing` stage parameters (`postGain`, MBC, PreEq), a debug-only in-app measurement
+tap was built (`PlaybackCaptureHarness.kt` + `HarnessCaptureService.kt`, gated behind
+`BuildConfig.DEBUG`): `AudioPlaybackCaptureConfiguration` capturing this app's own `USAGE_MEDIA`
+test tone, computing peak/RMS dBFS. **Control test result: this tap cannot measure per-session
+effects on this device at all.** A 0 dBFS test tone at max stream volume captured at a fixed
+**-18.06 dB peak** regardless of whether the Limiter was attached-and-enabled or fully released —
+and, decisively, regardless of whether an `Equalizer` with all 5 bands pinned to their minimum
+gain (-15 dB each, confirmed `enabled=true` readback on the tone's *own* `getAudioSessionId()`,
+not a decoy session) was attached. -18.06 dB is suspiciously exact: `20*log10(4096/32767) =
+-18.06`, i.e. sample value 4096 = 2^12 = exactly 1/8 full scale — a fixed digital pad the capture
+path applies, unrelated to the actual acoustic signal. The tap sits upstream of wherever
+per-session insert effects apply, so no capture-level comparison through it is meaningful for any
+session effect, Limiter or otherwise. (A 3.5mm-out → laptop line-in fallback was also attempted
+and abandoned — the laptop's analog input never received signal from the phone regardless of
+volume/gain-boost settings, most likely a TRS/TRRS pin mismatch in the laptop's combo jack; not
+worth further hardware debugging given the finding below made it unnecessary.)
+
+**The discriminating test that mattered: `dumpsys media.audio_flinger`'s per-session effect-chain
+listing, diffed before/after attaching an effect.** With the `Equalizer` above attached and
+enabled on the tone's live session (id 40729 in this run), the dump showed `2 effects for session
+40729`, including an entry for the Equalizer with `Registered=y Enabled=y Suspended=n` and its
+real NXP-software engine handle. Releasing it dropped the listing to `1 effects for session
+40729` and the Equalizer entry vanished entirely. **This is hard, direct evidence that per-session
+effects are genuinely inserted into and removed from AudioFlinger's live processing graph on this
+device** — the Real-Time Limiter architecture is validated as functional at the audio-engine
+level; the earlier capture-harness null result was an instrument-blindness artifact, not evidence
+the Limiter (or any session effect) is a no-op. This chain-diff technique — not the capture
+harness — is the reliable way to confirm "is this effect actually active," and is what the clamp-
+workaround arms (postGain/MBC/PreEq) use going forward, combined with parameter readback (to catch
+a silent clamp like the threshold one above) and, where a human is available, an audible check
+(the Equalizer min-gain test is unmistakably audible, confirming the chain-diff's read of "active"
+matches what a listener actually hears).
+
+**Clamp-workaround arms (2026-08-18): all three fail identically — no adjustable
+`DynamicsProcessing` dB path exists on this device.** With the chain-diff instrument validated
+above, all three arms from the original plan were tested directly in `SessionLimiterManager.attach()`
+against the live test-tone session, each read back immediately after being set:
+
+- **Arm 1 — `Limiter.setPostGain(-20f)`**: requested -20.0, **readback 0.0**.
+- **Arm 2 — MBC re-enabled, permissive threshold (0dB)/ratio (1:1) so behavior is dominated by
+  gain, `MbcBand.setPostGain(-20f)` on every band** (real `bandCount` read off the config, not
+  assumed — 6 bands on this device): requested -20.0, **readback 0.0 on every band**.
+- **Arm 3 — PreEq re-enabled, `EqBand.setGain(-20f)` on every band** (6 bands): requested -20.0,
+  **readback 0.0 on every band**.
+
+Every arm was silently reset to its inert default (0.0), the exact same failure shape as the
+Limiter threshold clamp above (request an extreme value, read back the untouched default) —
+not a crash, not an exception, not even a stored-but-inert value; the parameter simply never
+moved. **Honest conclusion, per the plan's own stopping rule: this Samsung `libdynproc.so` HAL
+implementation exposes no adjustable gain/threshold parameter anywhere in `DynamicsProcessing`
+that userspace can actually move** — `setEnabled()` is real and does insert/remove the effect
+from the live audio graph (proven above), but every numeric parameter that would change *how
+much* it does is clamped back to a fixed default. The Real-Time Limiter's only real, working
+behavior on this device is therefore binary: a fixed ~-2 dB peak ceiling, on or off, with no
+adjustable headroom — which is what `android/README.md` and the unified-toggle design (step 4)
+must state plainly rather than imply a working dB slider. This experiment code was reverted after
+testing (each arm modified and rebuilt `SessionLimiterManager.attach()` in place, one at a time,
+then restored to the clean committed baseline) rather than left in the shipped path, since none of
+the three worked.
+
 ---
 
 This is the hard part, and the one place Android is meaningfully more restricted than the other
@@ -388,11 +450,17 @@ rather than deleted, so the original scope stays visible.
       click sounds) failed with a native engine-init error. Spotify/Chrome/SoundCloud not
       specifically tested this session — same category of expected gap RootlessJamesDSP documents,
       not yet individually confirmed here.
-- [ ] Confirmed via logged peak values that a deliberately loud/clipping input is actually capped
-      at the output for an app that *does* support capture. Not done — Android has no equivalent to
-      the `ffmpeg`/`parecord` peak-logging setup the Linux port used; what *is* confirmed via
-      read-back is that the limiter's threshold parameter is live and enabled, but not yet the
-      actual acoustic/measured effect.
+- [x] Confirmed session effects are genuinely active in the real audio path, not just
+      accepting parameters — via `dumpsys media.audio_flinger`'s per-session effect-chain diff
+      (see the "Measurement harness" note above), not via logged peak values: `AudioPlaybackCaptureConfiguration`-based
+      capture was tried first and found to sit upstream of session effects on this device (a fixed
+      -18.06dB pad, unrelated to the actual signal, regardless of what's attached), so it can't be
+      used for level measurement here. The chain-diff instead directly confirms
+      `Registered=y Enabled=y Suspended=n` appearing/disappearing for an attached effect. Still
+      open: a dB-accurate measurement of the Limiter's specific numeric effect (the chain-diff
+      proves activation, not magnitude) — would need a working analog capture path, not yet
+      achieved on this device (3.5mm-out → laptop line-in was attempted and abandoned; the
+      laptop's input never received signal, likely a TRS/TRRS mismatch in its combo jack).
 - [x] Toggling the limiter off reverts cleanly — confirmed via `SessionLimiterManager.releaseAll()`
       being called whenever `DUMP` isn't held or the feature is disabled; each attached
       `DynamicsProcessing` instance is disabled then released, not just abandoned.
