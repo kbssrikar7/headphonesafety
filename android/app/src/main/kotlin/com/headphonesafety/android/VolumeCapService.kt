@@ -11,10 +11,12 @@ import android.content.IntentFilter
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
@@ -41,6 +43,11 @@ class VolumeCapService : Service() {
         private const val POLL_INTERVAL_MS = 400L
         private const val LIMITER_POLL_INTERVAL_MS = 2000L
         private const val SET_VOLUME_RETRIES = 3
+        // AudioPlaybackConfiguration changes arrive in bursts (multiple callbacks within a few
+        // hundred ms of one new session starting) — coalesce into a single out-of-cycle scan
+        // rather than forking a dumpsys process per burst event.
+        private const val PLAYBACK_CALLBACK_DEBOUNCE_MS = 300L
+        private const val TAG = "HPS-VolumeCapService"
 
         private val HEADPHONE_TYPES = buildSet {
             add(AudioDeviceInfo.TYPE_WIRED_HEADPHONES)
@@ -70,6 +77,35 @@ class VolumeCapService : Service() {
             headphoneActive = false
             refreshHeadphoneState(enforceIfActive = false)
         }
+    }
+
+    /**
+     * Trigger only, not a session-ID source — `AudioPlaybackConfiguration.getSessionId()` is
+     * `@SystemApi`-hidden and scrubbed to a placeholder for normal apps (confirmed via AOSP's
+     * `PlaybackActivityMonitor.anonymizeForPublicConsumption()`), so this callback can't hand us
+     * real session ids directly the way `dumpsys media.audio_flinger` can. What it *can* do is
+     * tell us "something's playback state changed somewhere on the system, right now" — used here
+     * only to run an out-of-cycle limiter scan instead of waiting up to
+     * [LIMITER_POLL_INTERVAL_MS] for the next poll tick. The base poll interval is deliberately
+     * left unchanged; the cost this trigger saves is *latency to first scan*, not scan frequency.
+     */
+    private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
+            pollHandler.removeCallbacks(debouncedLimiterScan)
+            pollHandler.postDelayed(debouncedLimiterScan, PLAYBACK_CALLBACK_DEBOUNCE_MS)
+        }
+    }
+
+    private val debouncedLimiterScan = Runnable {
+        if (Prefs.isLimiterEnabled(this)) {
+            Log.d(TAG, "out-of-cycle limiter scan triggered by AudioPlaybackCallback")
+        }
+        // Cancel any already-scheduled regular tick and let this run take its place — running
+        // limiterPollRunnable directly (not just its body) means it also re-schedules the next
+        // regular tick LIMITER_POLL_INTERVAL_MS from *now*, so the trigger and the base poll never
+        // double up.
+        pollHandler.removeCallbacks(limiterPollRunnable)
+        limiterPollRunnable.run()
     }
 
     private val volumeChangeReceiver = object : BroadcastReceiver() {
@@ -113,6 +149,7 @@ class VolumeCapService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         limiterManager = SessionLimiterManager(this)
         audioManager.registerAudioDeviceCallback(deviceCallback, null)
+        audioManager.registerAudioPlaybackCallback(playbackCallback, pollHandler)
         registerReceiver(volumeChangeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
         pollHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
         pollHandler.postDelayed(limiterPollRunnable, LIMITER_POLL_INTERVAL_MS)
@@ -132,9 +169,11 @@ class VolumeCapService : Service() {
 
     override fun onDestroy() {
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
+        audioManager.unregisterAudioPlaybackCallback(playbackCallback)
         unregisterReceiver(volumeChangeReceiver)
         pollHandler.removeCallbacks(pollRunnable)
         pollHandler.removeCallbacks(limiterPollRunnable)
+        pollHandler.removeCallbacks(debouncedLimiterScan)
         limiterManager.releaseAll()
         super.onDestroy()
     }
