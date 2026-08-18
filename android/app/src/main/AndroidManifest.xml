@@ -15,6 +15,15 @@
          OPTIMIZATION_SETTINGS) so the user can whitelist this app themselves — not used to show
          the direct per-app "ignore battery optimizations" system dialog. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Required by AudioRecord even in MediaProjection-based playback-capture mode. Used only by
+         a debug-only measurement harness (PlaybackCaptureHarness.kt, wired to a debug-build-only
+         button in MainActivity) that verifies whether Real-Time Limiter parameter changes actually
+         affect the audio, not by the shipped feature — never used to record the microphone. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Required to run HarnessCaptureService, the debug-only foreground service that hosts the
+         MediaProjection session for the measurement harness above (getMediaProjection() rejects
+         being called anywhere else — confirmed live). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:label="@string/app_name"
@@ -40,6 +49,13 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Continuously caps media volume while headphones are connected, to protect hearing." />
         </service>
+
+        <!-- Debug-only, hosts the measurement harness's MediaProjection session — see
+             HarnessCaptureService.kt. Not part of the shipped feature. -->
+        <service
+            android:name=".HarnessCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <receiver
             android:name=".BootReceiver"

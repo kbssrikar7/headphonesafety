@@ -125,5 +125,37 @@
         android:textSize="12sp"
         android:textColor="#88000000" />
 
+    <!-- Debug-only measurement harness trigger (PlaybackCaptureHarness) — hidden in release
+         builds, made visible from MainActivity only when BuildConfig.DEBUG. -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#33000000"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="24dp" />
+
+    <Button
+        android:id="@+id/testTonePlayButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:text="Play test tone (debug)" />
+
+    <Button
+        android:id="@+id/harnessButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"
+        android:text="Run level-capture harness (debug)" />
+
+    <TextView
+        android:id="@+id/harnessResultText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:visibility="gone"
+        android:textSize="12sp" />
+
 </LinearLayout>
 </ScrollView>

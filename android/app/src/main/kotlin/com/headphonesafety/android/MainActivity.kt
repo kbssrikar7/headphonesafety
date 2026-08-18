@@ -5,6 +5,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -30,6 +33,10 @@ class MainActivity : Activity() {
     private lateinit var batteryStatusText: TextView
     private lateinit var batterySettingsButton: Button
     private lateinit var oemBatteryNoteText: TextView
+    private lateinit var harnessButton: Button
+    private lateinit var harnessResultText: TextView
+    private lateinit var testTonePlayButton: Button
+    private var testTonePlayer: MediaPlayer? = null
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private val limiterStatusRunnable = object : Runnable {
@@ -53,6 +60,16 @@ class MainActivity : Activity() {
         batterySettingsButton = findViewById(R.id.batterySettingsButton)
         oemBatteryNoteText = findViewById(R.id.oemBatteryNoteText)
         oemBatteryNoteText.text = buildOemBatteryNote()
+        harnessButton = findViewById(R.id.harnessButton)
+        harnessResultText = findViewById(R.id.harnessResultText)
+        testTonePlayButton = findViewById(R.id.testTonePlayButton)
+        if (BuildConfig.DEBUG) {
+            harnessButton.visibility = android.view.View.VISIBLE
+            harnessResultText.visibility = android.view.View.VISIBLE
+            harnessButton.setOnClickListener { startHarnessCapture() }
+            testTonePlayButton.visibility = android.view.View.VISIBLE
+            testTonePlayButton.setOnClickListener { toggleTestTone() }
+        }
         batterySettingsButton.setOnClickListener {
             // Opens the OS's battery-optimization list screen, not the direct per-app request
             // dialog — the user does the actual whitelisting themselves from there.
@@ -125,6 +142,12 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         uiHandler.removeCallbacks(limiterStatusRunnable)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        testTonePlayer?.release()
+        testTonePlayer = null
     }
 
     private fun updateStatusText() {
@@ -213,7 +236,117 @@ class MainActivity : Activity() {
         startService(Intent(this, VolumeCapService::class.java).setAction(VolumeCapService.ACTION_STOP))
     }
 
+    /**
+     * Debug-only self-contained hot test tone, used for the measurement harness's control test
+     * and clamp-workaround experiments — plays inside this app's own process so its audio session
+     * goes through the exact same discovery/attach path as any third-party app's would, without
+     * depending on an external media app or chooser dialog. Reads from this app's own external
+     * files dir (`getExternalFilesDir`), not a shared path like /sdcard/Download — scoped storage
+     * (Android 10+) blocks a normal app from opening arbitrary shared-storage paths without
+     * MANAGE_EXTERNAL_STORAGE, confirmed live the hard way (crash-log EACCES on
+     * `/sdcard/Download/hps_test_tone.wav`). Push the tone there with:
+     * `adb push hps_test_tone.wav /sdcard/Android/data/com.headphonesafety.android/files/`
+     */
+    private fun toggleTestTone() {
+        val existing = testTonePlayer
+        if (existing != null) {
+            existing.stop()
+            existing.release()
+            testTonePlayer = null
+            testTonePlayButton.text = "Play test tone (debug)"
+            return
+        }
+        val toneFile = java.io.File(getExternalFilesDir(null), "hps_test_tone.wav")
+        if (!toneFile.exists()) {
+            harnessResultText.text = "Missing $toneFile — adb push it first."
+            return
+        }
+        val player = MediaPlayer().apply {
+            // MediaPlayer defaults to USAGE_UNKNOWN, not USAGE_MEDIA — confirmed live via
+            // `dumpsys audio`'s playback event log. PlaybackCaptureHarness's capture config
+            // matches only USAGE_MEDIA (the same usage real media apps use), so without this the
+            // harness would silently capture nothing from this test tone at all.
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            setDataSource(toneFile.absolutePath)
+            isLooping = true
+            prepare()
+            start()
+        }
+        testTonePlayer = player
+        testTonePlayButton.text = "Stop test tone (debug)"
+    }
+
+    /**
+     * Debug-only entry point into [PlaybackCaptureHarness] — see that class's doc comment for
+     * why this exists (a real level measurement, since a correct DynamicsProcessing parameter
+     * read-back is not proof it's actually applied). RECORD_AUDIO is required by AudioRecord even
+     * in playback-capture mode; MediaProjection's consent dialog is the standard system flow for
+     * this API, not something this app can skip.
+     */
+    private fun startHarnessCapture() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO
+            )
+            return
+        }
+        harnessResultText.text = "Requesting capture permission..."
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        @Suppress("DEPRECATION")
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_MEDIA_PROJECTION)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECORD_AUDIO &&
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        ) {
+            startHarnessCapture()
+        }
+    }
+
+    /**
+     * `MediaProjectionManager.getMediaProjection()` throws `SecurityException: Media projections
+     * require a foreground service of type ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`
+     * unless called from within one — confirmed live, crashes even on this Android 10 device
+     * despite that restriction being documented as an Android 14+ thing. So this hands the
+     * result off to [HarnessCaptureService] instead of calling getMediaProjection() here.
+     */
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_MEDIA_PROJECTION) return
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            harnessResultText.text = "Capture permission denied."
+            return
+        }
+        harnessResultText.text =
+            "Capturing via HarnessCaptureService (${HARNESS_DURATION_MS / 1000}s) — see logcat HPS-Harness"
+        val serviceIntent = Intent(this, HarnessCaptureService::class.java).apply {
+            putExtra(HarnessCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(HarnessCaptureService.EXTRA_RESULT_DATA, data)
+            putExtra(HarnessCaptureService.EXTRA_DURATION_MS, HARNESS_DURATION_MS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
     companion object {
         private const val REQUEST_NOTIFICATIONS = 100
+        private const val REQUEST_RECORD_AUDIO = 101
+        private const val REQUEST_MEDIA_PROJECTION = 102
+        private const val HARNESS_DURATION_MS = 8000L
     }
 }
